@@ -1,8 +1,8 @@
 import logging
-import hashlib
+
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -18,7 +18,7 @@ from app.repositories.standings import (
     insert_standing_row,
     insert_standing_snapshot,
 )
-from app.providers import provider_manager
+from app.services import collection_service
 
 
 router = APIRouter(
@@ -46,21 +46,7 @@ async def collect_football_data_standings(
         f"competitions/{competition_code}/standings"
     )
 
-    requested_at = datetime.now(timezone.utc)
 
-    request_key_payload = {
-        "provider": "football-data.org",
-        "operation": "standings",
-        "competition": competition_code,
-    }
-
-    request_key = hashlib.sha256(
-        json.dumps(
-            request_key_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
 
     api_key = os.getenv(
         "FOOTBALL_DATA_API_KEY",
@@ -74,161 +60,25 @@ async def collect_football_data_standings(
         )
  
 
-    try:
-        response_status, payload = await provider_manager.fetch(
-            provider="football_data",
-            endpoint=endpoint,
-            params={},
-            api_key=api_key,
-        )
-
-        
-       
-
-    except Exception as exc:
-        logger.exception(
-            "Standings request failed for competition=%s",
-            competition_code,
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "Unable to collect standings",
-                "provider": "football-data.org",
-                "competition": competition_code,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        ) from exc
-    
-    
-
-
-    payload_json = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
+    collection_result = await collection_service.collect(
+        provider="football_data",
+        endpoint=endpoint,
+        params={},
+        api_key=api_key,
+        collector="standings",
+        ttl=timedelta(hours=6),
+        metadata={
+            "provider": "football-data.org",
+            "competition": competition_code,
+        },
     )
 
-    payload_hash = hashlib.sha256(
-        payload_json.encode("utf-8")
-    ).hexdigest()
+    response_status = collection_result["response_status"]
+    payload = collection_result["payload"]
+    raw_payload = collection_result["raw_payload"]
+    error_message = collection_result["error_message"]
+    
 
-    error_message = None
-
-    if response_status >= 400:
-        error_message = (
-            payload.get("message")
-            if isinstance(payload, dict)
-            else "Provider request failed"
-        )
-
-    expires_at = requested_at + timedelta(hours=6)
-
-    async with pool.connection() as connection:
-        source_result = await connection.execute(
-            """
-            SELECT id
-            FROM core.data_sources
-            WHERE code = 'football_data'
-            LIMIT 1
-            """
-        )
-
-        source = await source_result.fetchone()
-
-        if source is None:
-            raise HTTPException(
-                status_code=500,
-                detail="football_data source is not configured",
-            )
-
-        raw_result = await connection.execute(
-            """
-            INSERT INTO raw.api_payloads (
-                source_id,
-                endpoint,
-                request_key,
-                requested_at,
-                response_status,
-                payload,
-                payload_hash,
-                expires_at,
-                error_message
-            )
-            VALUES (
-                %(source_id)s,
-                %(endpoint)s,
-                %(request_key)s,
-                %(requested_at)s,
-                %(response_status)s,
-                %(payload)s::jsonb,
-                %(payload_hash)s,
-                %(expires_at)s,
-                %(error_message)s
-            )
-            RETURNING
-                id,
-                source_id,
-                endpoint,
-                request_key,
-                requested_at,
-                response_status,
-                payload_hash,
-                expires_at,
-                error_message
-            """,
-            {
-                "source_id": source["id"],
-                "endpoint": endpoint,
-                "request_key": request_key,
-                "requested_at": requested_at,
-                "response_status": response_status,
-                "payload": payload_json,
-                "payload_hash": payload_hash,
-                "expires_at": expires_at,
-                "error_message": error_message,
-            },
-        )
-
-        raw_payload = await raw_result.fetchone()
-
-        if response_status < 400:
-            await connection.execute(
-                """
-                UPDATE core.data_sources
-                SET
-                    requests_used_today =
-                        requests_used_today + 1,
-                    last_success_at = %(requested_at)s,
-                    updated_at = %(requested_at)s
-                WHERE id = %(source_id)s
-                """,
-                {
-                    "source_id": source["id"],
-                    "requested_at": requested_at,
-                },
-            )
-
-        else:
-            await connection.execute(
-                """
-                UPDATE core.data_sources
-                SET
-                    requests_used_today =
-                        requests_used_today + 1,
-                    last_failure_at = %(requested_at)s,
-                    updated_at = %(requested_at)s
-                WHERE id = %(source_id)s
-                """,
-                {
-                    "source_id": source["id"],
-                    "requested_at": requested_at,
-                },
-            )
-
-        await connection.commit()
 
     if response_status >= 400:
         raise HTTPException(

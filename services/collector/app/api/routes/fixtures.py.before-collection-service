@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException, Query
 from app.db.connection import pool
 from app.normalizers.fixtures import normalize_fixture
 from app.providers import provider_manager
-from app.services import collection_service
 
 
 router = APIRouter(
@@ -77,23 +76,178 @@ async def collect_football_data_fixtures(
 
     endpoint = "https://api.football-data.org/v4/matches"
 
-    collection_result = await collection_service.collect(
-        provider="football_data",
-        endpoint=endpoint,
-        params=params,
-        api_key=api_key,
-        collector="fixtures",
-        ttl=timedelta(hours=6),
-        metadata={
-            "provider": "football-data.org",
-            "request_params": params,
+    request_key_source = json.dumps(
+        {
+            "endpoint": endpoint,
+            "params": params,
         },
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
-    response_status = collection_result["response_status"]
-    payload = collection_result["payload"]
-    stored_payload = collection_result["raw_payload"]
-    error_message = collection_result["error_message"]
+    request_key = hashlib.sha256(
+        request_key_source.encode("utf-8")
+    ).hexdigest()
+
+    try:
+        response_status, payload = await provider_manager.fetch(
+            provider="football_data",
+            endpoint=endpoint,
+            params=params,
+            api_key=api_key,
+        )
+
+    except RuntimeError as exc:
+        logger.exception("Football-data request failed")
+
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+    payload_json = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    payload_hash = hashlib.sha256(
+        payload_json.encode("utf-8")
+    ).hexdigest()
+
+    error_message = None
+
+    if response_status >= 400:
+        error_message = (
+            payload.get("message")
+            or payload.get("error")
+            or f"football-data.org returned HTTP {response_status}"
+        )
+
+    try:
+        async with pool.connection() as connection:
+            source_result = await connection.execute(
+                """
+                SELECT id, enabled
+                FROM core.data_sources
+                WHERE code = %s
+                LIMIT 1
+                """,
+                ("football_data",),
+            )
+
+            source = await source_result.fetchone()
+
+            if not source:
+                raise HTTPException(
+                    status_code=500,
+                    detail="football_data source is missing from core.data_sources",
+                )
+
+            if not source["enabled"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="football_data source is disabled",
+                )
+
+            insert_result = await connection.execute(
+                """
+                INSERT INTO raw.api_payloads (
+                    source_id,
+                    endpoint,
+                    request_key,
+                    requested_at,
+                    response_status,
+                    payload,
+                    payload_hash,
+                    expires_at,
+                    error_message,
+                    metadata
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    NOW(),
+                    %s,
+                    %s::jsonb,
+                    %s,
+                    NOW() + INTERVAL '6 hours',
+                    %s,
+                    %s::jsonb
+                )
+                RETURNING
+                    id,
+                    source_id,
+                    endpoint,
+                    request_key,
+                    requested_at,
+                    response_status,
+                    payload_hash,
+                    expires_at,
+                    error_message
+                """,
+                (
+                    source["id"],
+                    endpoint,
+                    request_key,
+                    response_status,
+                    payload_json,
+                    payload_hash,
+                    error_message,
+                    json.dumps(
+                        {
+                            "provider": "football-data.org",
+                            "collector": "fixtures",
+                            "request_params": params,
+                            "collected_at": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        }
+                    ),
+                ),
+            )
+
+            stored_payload = await insert_result.fetchone()
+
+            if response_status < 400:
+                await connection.execute(
+                    """
+                    UPDATE core.data_sources
+                    SET
+                        requests_used_today =
+                            COALESCE(requests_used_today, 0) + 1,
+                        last_success_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (source["id"],),
+                )
+            else:
+                await connection.execute(
+                    """
+                    UPDATE core.data_sources
+                    SET
+                        requests_used_today =
+                            COALESCE(requests_used_today, 0) + 1,
+                        last_failure_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (source["id"],),
+                )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception("Unable to store football-data payload")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store football-data payload",
+        ) from exc
 
     if response_status >= 400:
         raise HTTPException(

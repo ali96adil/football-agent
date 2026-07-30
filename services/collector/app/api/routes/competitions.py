@@ -1,15 +1,13 @@
-import hashlib
-import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from app.db.connection import pool
 from app.repositories.entities import upsert_competition, upsert_season
-from app.providers import provider_manager
+from app.services import collection_service
 
 
 router = APIRouter(
@@ -33,157 +31,35 @@ async def sync_football_data_competitions() -> dict[str, Any]:
     endpoint = "https://api.football-data.org/v4/competitions"
     params: dict[str, str] = {}
 
-    request_key_source = json.dumps(
-        {
-            "endpoint": endpoint,
-            "params": params,
+    collection_result = await collection_service.collect(
+        provider="football_data",
+        endpoint=endpoint,
+        params=params,
+        api_key=api_key,
+        collector="competitions",
+        ttl=timedelta(days=7),
+        metadata={
+            "provider": "football-data.org",
         },
-        sort_keys=True,
-        separators=(",", ":"),
     )
 
-    request_key = hashlib.sha256(
-        request_key_source.encode("utf-8")
-    ).hexdigest()
-
-    try:
-        response_status, payload = await provider_manager.fetch(
-            provider="football_data",
-            endpoint=endpoint,
-            params=params,
-            api_key=api_key,
-        )
-    except RuntimeError as exc:
-        logger.exception("Football-data competitions request failed")
-
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
-
-    payload_json = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-    payload_hash = hashlib.sha256(
-        payload_json.encode("utf-8")
-    ).hexdigest()
-
-    error_message = None
+    response_status = collection_result["response_status"]
+    payload = collection_result["payload"]
+    stored_payload = collection_result["raw_payload"]
+    error_message = collection_result["error_message"]
 
     if response_status >= 400:
-        error_message = (
-            payload.get("message")
-            or payload.get("error")
-            or f"football-data.org returned HTTP {response_status}"
+        raise HTTPException(
+            status_code=response_status,
+            detail={
+                "message": error_message,
+                "raw_payload_id": stored_payload["id"],
+                "provider_response": payload,
+            },
         )
 
     try:
         async with pool.connection() as connection:
-            source_result = await connection.execute(
-                """
-                SELECT id, enabled
-                FROM core.data_sources
-                WHERE code = %s
-                LIMIT 1
-                """,
-                ("football_data",),
-            )
-
-            source = await source_result.fetchone()
-
-            if not source:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "football_data source is missing "
-                        "from core.data_sources"
-                    ),
-                )
-
-            if not source["enabled"]:
-                raise HTTPException(
-                    status_code=409,
-                    detail="football_data source is disabled",
-                )
-
-            raw_result = await connection.execute(
-                """
-                INSERT INTO raw.api_payloads (
-                    source_id,
-                    endpoint,
-                    request_key,
-                    requested_at,
-                    response_status,
-                    payload,
-                    payload_hash,
-                    expires_at,
-                    error_message,
-                    metadata
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    NOW(),
-                    %s,
-                    %s::jsonb,
-                    %s,
-                    NOW() + INTERVAL '7 days',
-                    %s,
-                    %s::jsonb
-                )
-                RETURNING id
-                """,
-                (
-                    source["id"],
-                    endpoint,
-                    request_key,
-                    response_status,
-                    payload_json,
-                    payload_hash,
-                    error_message,
-                    json.dumps(
-                        {
-                            "provider": "football-data.org",
-                            "collector": "competitions",
-                            "collected_at": datetime.now(
-                                timezone.utc
-                            ).isoformat(),
-                        },
-                        ensure_ascii=False,
-                    ),
-                ),
-            )
-
-            stored_payload = await raw_result.fetchone()
-
-            if response_status >= 400:
-                await connection.execute(
-                    """
-                    UPDATE core.data_sources
-                    SET
-                        requests_used_today =
-                            COALESCE(requests_used_today, 0) + 1,
-                        last_failure_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (source["id"],),
-                )
-
-                raise HTTPException(
-                    status_code=response_status,
-                    detail={
-                        "message": error_message,
-                        "raw_payload_id": stored_payload["id"],
-                        "provider_response": payload,
-                    },
-                )
-
             competitions = payload.get("competitions", [])
 
             if not isinstance(competitions, list):
@@ -239,19 +115,6 @@ async def sync_football_data_competitions() -> dict[str, Any]:
                         "Unable to sync competition: %s",
                         competition_data.get("name"),
                     )
-
-            await connection.execute(
-                """
-                UPDATE core.data_sources
-                SET
-                    requests_used_today =
-                        COALESCE(requests_used_today, 0) + 1,
-                    last_success_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = %s
-                """,
-                (source["id"],),
-            )
 
         return {
             "status": "success",
