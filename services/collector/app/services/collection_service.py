@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.config import build_provider_endpoint, get_provider_settings
 from app.db.connection import pool
 from app.providers import provider_manager
 
@@ -18,14 +19,23 @@ class CollectionService:
         provider: str,
         endpoint: str,
         params: dict[str, Any],
-        api_key: str,
+        api_key: str | None = None,
         collector: str,
         ttl: timedelta,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        provider_settings = get_provider_settings(provider)
+
+        resolved_endpoint = build_provider_endpoint(
+            provider,
+            endpoint,
+        )
+
+        resolved_api_key = api_key or provider_settings.api_key
+
         request_key_source = json.dumps(
             {
-                "endpoint": endpoint,
+                "endpoint": resolved_endpoint,
                 "params": params,
             },
             sort_keys=True,
@@ -39,9 +49,9 @@ class CollectionService:
         try:
             response_status, payload = await provider_manager.fetch(
                 provider=provider,
-                endpoint=endpoint,
+                endpoint=resolved_endpoint,
                 params=params,
-                api_key=api_key,
+                api_key=resolved_api_key,
             )
         except RuntimeError as exc:
             raise HTTPException(
@@ -134,7 +144,7 @@ class CollectionService:
                 """,
                 (
                     source["id"],
-                    endpoint,
+                    resolved_endpoint,
                     request_key,
                     response_status,
                     payload_json,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,12 +20,31 @@ pool = AsyncConnectionPool(
 )
 
 
+async def open_connection_pool() -> None:
+    """
+    Opens the shared PostgreSQL connection pool.
+    Safe to call multiple times.
+    """
+    if pool.closed:
+        await pool.open()
+
+    await pool.wait()
+
+
+async def close_connection_pool() -> None:
+    """
+    Closes the shared PostgreSQL connection pool.
+    """
+    if not pool.closed:
+        await pool.close()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await pool.open()
-    await pool.wait()
+    await open_connection_pool()
 
     try:
         yield
+
     finally:
-        await pool.close()
+        await close_connection_pool()

@@ -305,3 +305,121 @@ async def sync_football_data_fixtures(
             ),
         },
     }
+
+
+@router.post("/collect/api-football/fixtures")
+async def collect_api_football_fixtures(
+    league: int = Query(
+        ...,
+        ge=1,
+        description="API-Football league ID",
+        examples=[39],
+    ),
+    season: int = Query(
+        ...,
+        ge=2000,
+        le=2100,
+        description="Season start year",
+        examples=[2026],
+    ),
+    date_from: str | None = Query(
+        default=None,
+        description="Start date using YYYY-MM-DD",
+        examples=["2026-08-21"],
+    ),
+    date_to: str | None = Query(
+        default=None,
+        description="End date using YYYY-MM-DD",
+        examples=["2026-08-30"],
+    ),
+) -> dict[str, Any]:
+    params: dict[str, str | int] = {
+        "league": league,
+        "season": season,
+    }
+
+    if date_from:
+        params["from"] = validate_iso_date(
+            date_from,
+            "date_from",
+        )
+
+    if date_to:
+        params["to"] = validate_iso_date(
+            date_to,
+            "date_to",
+        )
+
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=422,
+            detail="date_from cannot be later than date_to",
+        )
+
+    collection_result = await collection_service.collect(
+        provider="api_football",
+        endpoint="/fixtures",
+        params=params,
+        collector="fixtures",
+        ttl=timedelta(hours=6),
+        metadata={
+            "provider": "api-football",
+            "league": league,
+            "season": season,
+            "request_params": params,
+        },
+    )
+
+    response_status = collection_result["response_status"]
+    payload = collection_result["payload"]
+    stored_payload = collection_result["raw_payload"]
+    error_message = collection_result["error_message"]
+
+    if response_status >= 400:
+        raise HTTPException(
+            status_code=response_status,
+            detail={
+                "message": error_message,
+                "raw_payload_id": stored_payload["id"],
+                "provider_response": payload,
+            },
+        )
+
+    provider_errors = payload.get("errors")
+
+    if provider_errors:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "API-Football rejected the request",
+                "raw_payload_id": stored_payload["id"],
+                "provider_errors": provider_errors,
+                "parameters": payload.get("parameters"),
+            },
+        )
+
+    fixtures = payload.get("response", [])
+
+    if not isinstance(fixtures, list):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": (
+                    "Invalid fixtures payload from API-Football"
+                ),
+                "raw_payload_id": stored_payload["id"],
+            },
+        )
+
+    return {
+        "status": "success",
+        "provider": "api-football",
+        "operation": "collect_fixtures",
+        "league": league,
+        "season": season,
+        "fixtures_received": len(fixtures),
+        "filters": params,
+        "paging": payload.get("paging"),
+        "results": payload.get("results"),
+        "raw_payload": stored_payload,
+    }

@@ -56,10 +56,17 @@ class SnapshotService:
             fixtures=fixtures,
             window_size=window_size,
         )
+        if statistics.matches_played == 0:
+            raise ValueError(
+                f"No completed matches found for team {team_id}."
+            )
 
         ratings = RatingEngine.calculate(
             statistics,
         )
+
+
+        snapshot_time = cutoff_at or datetime.utcnow()
 
         snapshot = SnapshotBuilder.build(
             team_id=team_id,
@@ -67,7 +74,8 @@ class SnapshotService:
             season_id=season_id,
             statistics=statistics,
             ratings=ratings,
-            data_cutoff_at=cutoff_at,
+            snapshot_at=snapshot_time,
+            data_cutoff_at=snapshot_time,
         )
 
         return await save_snapshot(

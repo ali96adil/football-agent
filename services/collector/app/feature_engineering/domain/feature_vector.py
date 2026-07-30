@@ -70,6 +70,8 @@ class FeatureVector:
             return default
 
         return feature.value
+    def has(self, name: str) -> bool:
+        return self.get(name) is not None    
 
     def values_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
