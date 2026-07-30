@@ -1,0 +1,461 @@
+import hashlib
+import json
+import logging
+import os
+from datetime import date, datetime, timezone
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.db.connection import pool
+from app.normalizers.fixtures import normalize_fixture
+from app.providers import provider_manager
+
+
+router = APIRouter(
+    prefix="",
+    tags=["Football-Data Fixtures"],
+)
+
+logger = logging.getLogger("football-collector.fixtures")
+
+
+def validate_iso_date(value: str, field_name: str) -> str:
+    try:
+        date.fromisoformat(value)
+        return value
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must use YYYY-MM-DD format",
+        ) from exc
+
+
+@router.post("/collect/football-data/fixtures")
+async def collect_football_data_fixtures(
+    date_from: str | None = Query(
+        default=None,
+        description="Start date using YYYY-MM-DD",
+        examples=["2026-07-29"],
+    ),
+    date_to: str | None = Query(
+        default=None,
+        description="End date using YYYY-MM-DD",
+        examples=["2026-08-05"],
+    ),
+    competitions: str | None = Query(
+        default=None,
+        description="Competition codes separated by commas, for example PL,PD,SA",
+        examples=["PL"],
+    ),
+) -> dict[str, Any]:
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="FOOTBALL_DATA_API_KEY is not configured",
+        )
+
+    params: dict[str, str] = {}
+
+    if date_from:
+        params["dateFrom"] = validate_iso_date(date_from, "date_from")
+
+    if date_to:
+        params["dateTo"] = validate_iso_date(date_to, "date_to")
+
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=422,
+            detail="date_from cannot be later than date_to",
+        )
+
+    if competitions:
+        params["competitions"] = competitions.strip().upper()
+
+    endpoint = "https://api.football-data.org/v4/matches"
+
+    request_key_source = json.dumps(
+        {
+            "endpoint": endpoint,
+            "params": params,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    request_key = hashlib.sha256(
+        request_key_source.encode("utf-8")
+    ).hexdigest()
+
+    try:
+        response_status, payload = await provider_manager.fetch(
+            provider="football_data",
+            endpoint=endpoint,
+            params=params,
+            api_key=api_key,
+        )
+
+    except RuntimeError as exc:
+        logger.exception("Football-data request failed")
+
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+    payload_json = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    payload_hash = hashlib.sha256(
+        payload_json.encode("utf-8")
+    ).hexdigest()
+
+    error_message = None
+
+    if response_status >= 400:
+        error_message = (
+            payload.get("message")
+            or payload.get("error")
+            or f"football-data.org returned HTTP {response_status}"
+        )
+
+    try:
+        async with pool.connection() as connection:
+            source_result = await connection.execute(
+                """
+                SELECT id, enabled
+                FROM core.data_sources
+                WHERE code = %s
+                LIMIT 1
+                """,
+                ("football_data",),
+            )
+
+            source = await source_result.fetchone()
+
+            if not source:
+                raise HTTPException(
+                    status_code=500,
+                    detail="football_data source is missing from core.data_sources",
+                )
+
+            if not source["enabled"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="football_data source is disabled",
+                )
+
+            insert_result = await connection.execute(
+                """
+                INSERT INTO raw.api_payloads (
+                    source_id,
+                    endpoint,
+                    request_key,
+                    requested_at,
+                    response_status,
+                    payload,
+                    payload_hash,
+                    expires_at,
+                    error_message,
+                    metadata
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    NOW(),
+                    %s,
+                    %s::jsonb,
+                    %s,
+                    NOW() + INTERVAL '6 hours',
+                    %s,
+                    %s::jsonb
+                )
+                RETURNING
+                    id,
+                    source_id,
+                    endpoint,
+                    request_key,
+                    requested_at,
+                    response_status,
+                    payload_hash,
+                    expires_at,
+                    error_message
+                """,
+                (
+                    source["id"],
+                    endpoint,
+                    request_key,
+                    response_status,
+                    payload_json,
+                    payload_hash,
+                    error_message,
+                    json.dumps(
+                        {
+                            "provider": "football-data.org",
+                            "collector": "fixtures",
+                            "request_params": params,
+                            "collected_at": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        }
+                    ),
+                ),
+            )
+
+            stored_payload = await insert_result.fetchone()
+
+            if response_status < 400:
+                await connection.execute(
+                    """
+                    UPDATE core.data_sources
+                    SET
+                        requests_used_today =
+                            COALESCE(requests_used_today, 0) + 1,
+                        last_success_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (source["id"],),
+                )
+            else:
+                await connection.execute(
+                    """
+                    UPDATE core.data_sources
+                    SET
+                        requests_used_today =
+                            COALESCE(requests_used_today, 0) + 1,
+                        last_failure_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (source["id"],),
+                )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception("Unable to store football-data payload")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store football-data payload",
+        ) from exc
+
+    if response_status >= 400:
+        raise HTTPException(
+            status_code=response_status,
+            detail={
+                "message": error_message,
+                "raw_payload_id": stored_payload["id"],
+                "provider_response": payload,
+            },
+        )
+
+    matches = payload.get("matches", [])
+
+    return {
+        "status": "success",
+        "provider": "football-data.org",
+        "operation": "fixtures",
+        "matches_received": len(matches),
+        "filters": params,
+        "raw_payload": stored_payload,
+    }
+
+
+@router.post(
+    "/normalize/football-data/fixtures/{payload_id}"
+)
+async def normalize_football_data_fixtures(
+    payload_id: int,
+) -> dict[str, Any]:
+    try:
+        async with pool.connection() as connection:
+            payload_result = await connection.execute(
+                """
+                SELECT
+                    p.id,
+                    p.source_id,
+                    p.response_status,
+                    p.payload,
+                    s.code AS source_code
+                FROM raw.api_payloads p
+                JOIN core.data_sources s
+                  ON s.id = p.source_id
+                WHERE p.id = %s
+                LIMIT 1
+                """,
+                (payload_id,),
+            )
+
+            raw_payload = await payload_result.fetchone()
+
+            if not raw_payload:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Raw payload not found",
+                )
+
+            if raw_payload["source_code"] != "football_data":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payload does not belong to football_data",
+                )
+
+            if raw_payload["response_status"] != 200:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only successful payloads can be normalized",
+                )
+
+            payload = raw_payload["payload"] or {}
+            matches = payload.get("matches", [])
+
+            if not isinstance(matches, list):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Payload matches field is not a list",
+                )
+
+            normalized_fixture_ids: list[str] = []
+            failed_matches: list[dict[str, Any]] = []
+
+            for match in matches:
+                try:
+                    fixture_id = await normalize_fixture(
+                        connection,
+                        raw_payload["source_id"],
+                        payload_id,
+                        match,
+                    )
+
+                    normalized_fixture_ids.append(fixture_id)
+
+                except Exception as exc:
+                    logger.exception(
+                        "Unable to normalize match %s",
+                        match.get("id"),
+                    )
+
+                    failed_matches.append(
+                        {
+                            "external_fixture_id": match.get("id"),
+                            "error": str(exc),
+                        }
+                    )
+
+            if failed_matches:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "message": "Some fixtures failed to normalize",
+                        "normalized_count": len(
+                            normalized_fixture_ids
+                        ),
+                        "failed_count": len(failed_matches),
+                        "failures": failed_matches,
+                    },
+                )
+
+        return {
+            "status": "success",
+            "provider": "football-data.org",
+            "raw_payload_id": payload_id,
+            "matches_received": len(matches),
+            "fixtures_normalized": len(
+                normalized_fixture_ids
+            ),
+            "fixture_ids": normalized_fixture_ids,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception(
+            "Unable to normalize football-data fixtures"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to normalize football-data fixtures",
+        ) from exc
+
+
+@router.post("/sync/football-data/fixtures")
+async def sync_football_data_fixtures(
+    date_from: str | None = Query(
+        default=None,
+        description="Start date using YYYY-MM-DD",
+        examples=["2026-07-29"],
+    ),
+    date_to: str | None = Query(
+        default=None,
+        description="End date using YYYY-MM-DD",
+        examples=["2026-08-05"],
+    ),
+    competitions: str | None = Query(
+        default=None,
+        description="Competition codes separated by commas",
+        examples=["PL"],
+    ),
+) -> dict[str, Any]:
+    collection_result = await collect_football_data_fixtures(
+        date_from=date_from,
+        date_to=date_to,
+        competitions=competitions,
+    )
+
+    raw_payload = collection_result.get("raw_payload") or {}
+    payload_id = raw_payload.get("id")
+
+    if payload_id is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Collection succeeded but raw payload ID is missing",
+        )
+
+    normalization_result = (
+        await normalize_football_data_fixtures(
+            payload_id=int(payload_id),
+        )
+    )
+
+    return {
+        "status": "success",
+        "provider": "football-data.org",
+        "operation": "sync_fixtures",
+        "filters": collection_result.get("filters", {}),
+        "collection": {
+            "matches_received": collection_result.get(
+                "matches_received",
+                0,
+            ),
+            "raw_payload": raw_payload,
+        },
+        "normalization": {
+            "raw_payload_id": normalization_result.get(
+                "raw_payload_id"
+            ),
+            "matches_received": normalization_result.get(
+                "matches_received",
+                0,
+            ),
+            "fixtures_normalized": normalization_result.get(
+                "fixtures_normalized",
+                0,
+            ),
+            "fixture_ids": normalization_result.get(
+                "fixture_ids",
+                [],
+            ),
+        },
+    }

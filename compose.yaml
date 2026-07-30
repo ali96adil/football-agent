@@ -1,0 +1,143 @@
+name: football-agent
+
+services:
+  postgres:
+    image: postgres:17.10-alpine
+    container_name: football-postgres
+    restart: unless-stopped
+
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    networks:
+      - football_backend
+
+  collector:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile
+
+    container_name: football-collector
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "8000:8000"
+
+
+    environment:
+      TZ: ${TZ}
+      LOG_LEVEL: INFO
+
+      APP_DB_HOST: postgres
+      APP_DB_PORT: 5432
+
+      APP_DB_NAME: football_intelligence
+      APP_DB_USER: football_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      # API Keys
+      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY}
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY}
+      SPORTMONKS_API_KEY: ${SPORTMONKS_API_KEY}
+      THESPORTSDB_API_KEY: ${THESPORTSDB_API_KEY}
+
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    networks:
+      - football_backend
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: football-n8n
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "5678:5678"
+
+    environment:
+      TZ: ${TZ}
+      GENERIC_TIMEZONE: ${TZ}
+
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: public
+
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: ${N8N_PORT}
+      N8N_PROTOCOL: ${N8N_PROTOCOL}
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+
+      EXECUTIONS_DATA_PRUNE: ${EXECUTIONS_DATA_PRUNE}
+      EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE}
+     
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+    networks:
+      - football_backend
+
+  adminer:
+    image: adminer:latest
+    container_name: football-adminer
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "8080:8080"
+
+    networks:
+      - football_backend
+
+volumes:
+  postgres_data:
+    name: football_postgres_data
+
+  n8n_data:
+    name: football_n8n_data
+
+networks:
+  football_backend:
+    name: football_backend

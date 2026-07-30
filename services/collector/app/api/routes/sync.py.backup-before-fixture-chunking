@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import logging
+import time
+from datetime import date, timedelta
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.api.routes.competitions import (
+    sync_football_data_competitions,
+)
+from app.api.routes.fixtures import (
+    sync_football_data_fixtures,
+)
+from app.api.routes.standings import (
+    sync_football_data_standings,
+)
+from app.db.connection import pool
+from app.services.prediction_evaluation_service import (
+    PredictionEvaluationService,
+)
+from app.services.scheduled_prediction_service import (
+    ScheduledPredictionService,
+)
+
+
+router = APIRouter(
+    prefix="",
+    tags=["General Sync"],
+)
+
+logger = logging.getLogger("football-collector.sync")
+
+
+@router.post("/sync")
+async def sync_all(
+    fixture_days: int = Query(
+        default=14,
+        ge=1,
+        le=60,
+        description="Number of fixture days to sync from today",
+    ),
+    prediction_limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum scheduled fixtures to predict",
+    ),
+    evaluation_limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum finished predictions to evaluate",
+    ),
+    window_size: int = Query(
+        default=10,
+        ge=1,
+        le=100,
+        description="Number of historical matches used for snapshots",
+    ),
+    calculation_version: str = Query(
+        default="v1",
+        min_length=1,
+        max_length=100,
+        description="Snapshot calculation version",
+    ),
+) -> dict[str, Any]:
+    started_at = time.perf_counter()
+
+    started_on = date.today()
+    date_to = started_on + timedelta(days=fixture_days)
+
+    calculation_version = calculation_version.strip()
+
+    if not calculation_version:
+        raise HTTPException(
+            status_code=422,
+            detail="calculation_version must not be empty.",
+        )
+
+    result: dict[str, Any] = {
+        "status": "success",
+        "operation": "sync_all",
+        "date_from": started_on.isoformat(),
+        "date_to": date_to.isoformat(),
+        "settings": {
+            "fixture_days": fixture_days,
+            "prediction_limit": prediction_limit,
+            "evaluation_limit": evaluation_limit,
+            "window_size": window_size,
+            "calculation_version": calculation_version,
+        },
+        "competitions": None,
+        "fixtures": None,
+        "standings": {
+            "attempted": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "results": [],
+            "errors": [],
+        },
+        "evaluation": None,
+        "predictions": None,
+        "errors": [],
+        "duration_seconds": None,
+    }
+
+    def register_error(
+        *,
+        stage: str,
+        exc: Exception,
+    ) -> None:
+        result["status"] = "partial_success"
+
+        result["errors"].append(
+            {
+                "stage": stage,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Stage 1: Sync competitions
+    # ------------------------------------------------------------------
+
+    try:
+        result["competitions"] = (
+            await sync_football_data_competitions()
+        )
+
+    except Exception as exc:
+        logger.exception("Competition sync failed")
+
+        register_error(
+            stage="competitions",
+            exc=exc,
+        )
+
+        result["competitions"] = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+    # ------------------------------------------------------------------
+    # Stage 2: Load competitions from database
+    # ------------------------------------------------------------------
+
+    competitions: list[dict[str, Any]] = []
+
+    try:
+        async with pool.connection() as connection:
+            competitions_result = await connection.execute(
+                """
+                SELECT
+                    c.metadata->>'football_data_code' AS code,
+                    c.canonical_name,
+                    c.competition_type,
+                    EXISTS (
+                        SELECT 1
+                        FROM core.seasons s
+                        WHERE s.competition_id = c.id
+                          AND s.is_current = TRUE
+                    ) AS has_current_season
+                FROM core.competitions c
+                WHERE
+                    c.metadata->>'football_data_code' IS NOT NULL
+                    AND c.metadata->>'football_data_code' <> ''
+                ORDER BY c.canonical_name
+                """
+            )
+
+            competition_rows = (
+                await competitions_result.fetchall()
+            )
+
+            competitions = [
+                dict(row)
+                for row in competition_rows
+            ]
+
+    except Exception as exc:
+        logger.exception(
+            "Unable to load competitions from database"
+        )
+
+        register_error(
+            stage="load_competitions",
+            exc=exc,
+        )
+
+    all_codes = [
+        str(row["code"]).strip().upper()
+        for row in competitions
+        if row.get("code")
+    ]
+
+    current_leagues = [
+        row
+        for row in competitions
+        if row.get("has_current_season")
+        and row.get("competition_type") == "LEAGUE"
+        and row.get("code")
+    ]
+
+    # ------------------------------------------------------------------
+    # Stage 3: Sync fixtures
+    # ------------------------------------------------------------------
+
+    if all_codes:
+        try:
+            result["fixtures"] = (
+                await sync_football_data_fixtures(
+                    date_from=started_on.isoformat(),
+                    date_to=date_to.isoformat(),
+                    competitions=",".join(all_codes),
+                )
+            )
+
+        except Exception as exc:
+            logger.exception("Fixture sync failed")
+
+            register_error(
+                stage="fixtures",
+                exc=exc,
+            )
+
+            result["fixtures"] = {
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+    else:
+        result["fixtures"] = {
+            "status": "skipped",
+            "reason": "No Football-Data competition codes found.",
+        }
+
+    # ------------------------------------------------------------------
+    # Stage 4: Sync standings
+    # ------------------------------------------------------------------
+
+    for competition in current_leagues:
+        code = str(
+            competition["code"]
+        ).strip().upper()
+
+        result["standings"]["attempted"] += 1
+
+        try:
+            standing_result = (
+                await sync_football_data_standings(
+                    competition=code,
+                )
+            )
+
+            result["standings"]["succeeded"] += 1
+
+            result["standings"]["results"].append(
+                {
+                    "competition": code,
+                    "name": competition["canonical_name"],
+                    "result": standing_result,
+                }
+            )
+
+        except HTTPException as exc:
+            logger.exception(
+                "Standing sync failed for competition=%s",
+                code,
+            )
+
+            result["status"] = "partial_success"
+            result["standings"]["failed"] += 1
+
+            error_item = {
+                "competition": code,
+                "name": competition["canonical_name"],
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+            }
+
+            result["standings"]["errors"].append(
+                error_item
+            )
+
+            result["errors"].append(
+                {
+                    "stage": "standings",
+                    **error_item,
+                }
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Standing sync failed for competition=%s",
+                code,
+            )
+
+            result["status"] = "partial_success"
+            result["standings"]["failed"] += 1
+
+            error_item = {
+                "competition": code,
+                "name": competition["canonical_name"],
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+            result["standings"]["errors"].append(
+                error_item
+            )
+
+            result["errors"].append(
+                {
+                    "stage": "standings",
+                    **error_item,
+                }
+            )
+
+    # ------------------------------------------------------------------
+    # Stage 5: Evaluate finished predictions
+    # ------------------------------------------------------------------
+
+    try:
+        async with pool.connection() as connection:
+            result["evaluation"] = (
+                await PredictionEvaluationService.run(
+                    connection,
+                    limit=evaluation_limit,
+                )
+            )
+
+    except Exception as exc:
+        logger.exception(
+            "Prediction evaluation failed"
+        )
+
+        register_error(
+            stage="evaluation",
+            exc=exc,
+        )
+
+        result["evaluation"] = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+    # ------------------------------------------------------------------
+    # Stage 6: Build snapshots and predict scheduled fixtures
+    # ------------------------------------------------------------------
+
+    try:
+        async with pool.connection() as connection:
+            result["predictions"] = (
+                await ScheduledPredictionService.run(
+                    connection,
+                    kickoff_from=None,
+                    kickoff_to=None,
+                    competition_id=None,
+                    season_id=None,
+                    limit=prediction_limit,
+                    window_size=window_size,
+                    calculation_version=calculation_version,
+                )
+            )
+
+    except Exception as exc:
+        logger.exception(
+            "Scheduled prediction stage failed"
+        )
+
+        register_error(
+            stage="predictions",
+            exc=exc,
+        )
+
+        result["predictions"] = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+    # ------------------------------------------------------------------
+    # Final status
+    # ------------------------------------------------------------------
+
+    result["duration_seconds"] = round(
+        time.perf_counter() - started_at,
+        3,
+    )
+
+    logger.info(
+        (
+            "Sync pipeline completed with status=%s "
+            "duration_seconds=%s"
+        ),
+        result["status"],
+        result["duration_seconds"],
+    )
+
+    return result
