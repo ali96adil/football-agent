@@ -62,7 +62,15 @@ jobs:
       - name: Migrate empty test database
         run: python scripts/migrate.py
       - name: Validate checksum and queue schema
-        run: python scripts/migrate.py && python -c "import psycopg, os; c=psycopg.connect(f\"postgresql://{os.environ['APP_DB_USER']}:{os.environ['APP_DB_PASSWORD']}@{os.environ['APP_DB_HOST']}/{os.environ['APP_DB_NAME']}\"); assert c.execute(\"select to_regclass('core.jobs')\").fetchone()[0] == 'core.jobs'"
+        run: |
+          python scripts/migrate.py
+          python - <<'PY'
+          import os
+          import psycopg
+          url = f"postgresql://{os.environ['APP_DB_USER']}:{os.environ['APP_DB_PASSWORD']}@{os.environ['APP_DB_HOST']}/{os.environ['APP_DB_NAME']}"
+          with psycopg.connect(url) as connection:
+              assert connection.execute("select to_regclass('core.jobs')").fetchone()[0] == "core.jobs"
+          PY
       - name: Migrate a current-schema fixture
         run: bash ../../scripts/ci-migrate-current-schema.sh
 
