@@ -10,8 +10,11 @@ from app.api.routes.standings import router as standings_router
 from app.api.routes.sync import router as sync_router
 from app.db.connection import lifespan, pool
 from app.api.routes.snapshots import router as snapshots_router
-
-
+from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.fixtures_browser import router as fixtures_browser_router
+from app.api.routes.predictions import (
+    router as predictions_router,
+)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -34,7 +37,9 @@ app.include_router(standings_router)
 app.include_router(sync_router)
 
 app.include_router(snapshots_router)
-
+app.include_router(dashboard_router)
+app.include_router(predictions_router)
+app.include_router(fixtures_browser_router)
 @app.get("/")
 async def root() -> dict[str, str]:
     return {

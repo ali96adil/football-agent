@@ -74,6 +74,43 @@ services:
     networks:
       - football_backend
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+
+    container_name: football-frontend
+
+    restart: unless-stopped
+
+    depends_on:
+      collector:
+        condition: service_healthy
+
+    working_dir: /app
+
+    environment:
+      HOSTNAME: 0.0.0.0
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: ""
+
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+
+    ports:
+      - "3000:3000"
+
+    networks:
+      - football_backend
+
+
+
+
+
+
+
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: football-n8n
@@ -137,7 +174,13 @@ volumes:
 
   n8n_data:
     name: football_n8n_data
+    
+  frontend_node_modules:
+    name: football_frontend_node_modules   
 
+  frontend_next:
+    name: football_frontend_next   
 networks:
   football_backend:
     name: football_backend
+

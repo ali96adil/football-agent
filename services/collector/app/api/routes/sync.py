@@ -643,6 +643,7 @@ async def sync_all(
                     connection,
                     kickoff_from=None,
                     kickoff_to=None,
+                    days_ahead=fixture_days,
                     competition_id=None,
                     season_id=None,
                     limit=prediction_limit,
