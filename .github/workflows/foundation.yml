@@ -1,0 +1,78 @@
+name: v1 foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main, "v1/**"]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: football_intelligence
+          POSTGRES_USER: football_app
+          POSTGRES_PASSWORD: test-password-only
+        options: >-
+          --health-cmd "pg_isready -U football_app -d football_intelligence"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+    defaults:
+      run:
+        working-directory: services/collector
+    env:
+      APP_DB_HOST: 127.0.0.1
+      APP_DB_PORT: "5432"
+      APP_DB_NAME: football_intelligence
+      APP_DB_USER: football_app
+      APP_DB_PASSWORD: test-password-only
+      MIGRATIONS_ROOT: ../..
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - name: Migrate empty test database
+        run: python scripts/migrate.py
+      - name: Validate checksum and queue schema
+        run: python scripts/migrate.py && python -c "import psycopg, os; c=psycopg.connect(f\"postgresql://{os.environ['APP_DB_USER']}:{os.environ['APP_DB_PASSWORD']}@{os.environ['APP_DB_HOST']}/{os.environ['APP_DB_NAME']}\"); assert c.execute(\"select to_regclass('core.jobs')\").fetchone()[0] == 'core.jobs'"
+      - name: Migrate a current-schema fixture
+        run: bash ../../scripts/ci-migrate-current-schema.sh
+
+  compose-and-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose structure
+        run: docker compose --env-file .env.ci config --quiet
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate ARM64 Docker builds
+        run: docker buildx build --platform linux/arm64 --load -f services/collector/Dockerfile -t football-api-ci . && docker buildx build --platform linux/arm64 --load -f frontend/Dockerfile -t football-frontend-ci frontend
