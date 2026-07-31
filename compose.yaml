@@ -1,186 +1,220 @@
 name: football-agent
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "5m"
+    max-file: "3"
+
+x-app-db-env: &app-db-env
+  APP_DB_HOST: postgres
+  APP_DB_PORT: "5432"
+  # These are deliberately NOT derived from POSTGRES_DB / POSTGRES_USER.
+  APP_DB_NAME: football_intelligence
+  APP_DB_USER: football_app
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+
 services:
+  # The only service that publishes host ports. Caddy is small, has an
+  # official multi-architecture image, and is sufficient for local routing.
+  proxy:
+    image: caddy:2.10-alpine
+    container_name: football-proxy
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    ports:
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTP_PORT:-8088}:80"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs: [/tmp, /run]
+    mem_limit: ${PROXY_MEMORY_LIMIT:-96m}
+    cpus: ${PROXY_CPU_LIMIT:-0.25}
+    logging: *default-logging
+    networks: [football_edge]
+
   postgres:
     image: postgres:17.10-alpine
     container_name: football-postgres
     restart: unless-stopped
-
     environment:
-      TZ: ${TZ}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-
+      TZ: ${TZ:?set TZ in .env}
+      # Bootstrap variables are retained only for compatibility with the
+      # existing PostgreSQL volume, which was initialized for n8n.
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
+      # Do not rename or recreate this volume: it contains existing data.
       - postgres_data:/var/lib/postgresql/data
-
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-900m}
+    cpus: ${POSTGRES_CPU_LIMIT:-1.25}
+    logging: *default-logging
+    networks: [football_private]
 
-    networks:
-      - football_backend
-
-  collector:
+  migrate:
     build:
-      context: ./services/collector
-      dockerfile: Dockerfile
-
-    container_name: football-collector
-    restart: unless-stopped
-
+      context: .
+      dockerfile: services/collector/Dockerfile
+    restart: "no"
+    command: ["python", "scripts/migrate.py"]
     depends_on:
       postgres:
         condition: service_healthy
-
-    ports:
-      - "8000:8000"
-
-
     environment:
-      TZ: ${TZ}
-      LOG_LEVEL: INFO
+      <<: *app-db-env
+      MIGRATIONS_ROOT: /app
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 192m
+    cpus: "0.35"
+    logging: *default-logging
+    networks: [football_private]
 
-      APP_DB_HOST: postgres
-      APP_DB_PORT: 5432
-
-      APP_DB_NAME: football_intelligence
-      APP_DB_USER: football_app
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
-      # API Keys
-      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY}
-      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY}
-      SPORTMONKS_API_KEY: ${SPORTMONKS_API_KEY}
-      THESPORTSDB_API_KEY: ${THESPORTSDB_API_KEY}
-
-
+  api:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    container_name: football-api
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-db-env
+      TZ: ${TZ:?set TZ in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY:-}
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
+      SPORTMONKS_API_KEY: ${SPORTMONKS_API_KEY:-}
+      THESPORTSDB_API_KEY: ${THESPORTSDB_API_KEY:-}
+    expose: ["8000"]
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: ${API_MEMORY_LIMIT:-512m}
+    cpus: ${API_CPU_LIMIT:-0.75}
+    logging: *default-logging
+    networks: [football_edge, football_private]
 
-    networks:
-      - football_backend
+  worker:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    container_name: football-worker
+    command: ["python", "scripts/worker.py"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-db-env
+      TZ: ${TZ:?set TZ in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_ID: ${WORKER_ID:-football-worker-1}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-120}
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: ${WORKER_MEMORY_LIMIT:-320m}
+    cpus: ${WORKER_CPU_LIMIT:-0.50}
+    logging: *default-logging
+    networks: [football_private]
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
-
+      dockerfile: Dockerfile
     container_name: football-frontend
-
     restart: unless-stopped
-
     depends_on:
-      collector:
+      api:
         condition: service_healthy
-
-    working_dir: /app
-
     environment:
       HOSTNAME: 0.0.0.0
       NEXT_TELEMETRY_DISABLED: "1"
-      NEXT_PUBLIC_API_URL: ""
+    expose: ["3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-420m}
+    cpus: ${FRONTEND_CPU_LIMIT:-0.75}
+    logging: *default-logging
+    networks: [football_edge]
 
-    volumes:
-      - ./frontend:/app
-      - frontend_node_modules:/app/node_modules
-      - frontend_next:/app/.next
-
-    ports:
-      - "3000:3000"
-
-    networks:
-      - football_backend
-
-
-
-
-
-
-
+  # Retained for a reversible transition. Never started by default.
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
+    profiles: ["automation"]
     container_name: football-n8n
     restart: unless-stopped
-
     depends_on:
       postgres:
         condition: service_healthy
-
-    ports:
-      - "5678:5678"
-
     environment:
-      TZ: ${TZ}
-      GENERIC_TIMEZONE: ${TZ}
-
+      TZ: ${TZ:?set TZ in .env}
+      GENERIC_TIMEZONE: ${TZ:?set TZ in .env}
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
-      DB_POSTGRESDB_USER: ${POSTGRES_USER}
-      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       DB_POSTGRESDB_SCHEMA: public
-
-      N8N_HOST: ${N8N_HOST}
-      N8N_PORT: ${N8N_PORT}
-      N8N_PROTOCOL: ${N8N_PROTOCOL}
-      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE}
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-
-      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
-
-      EXECUTIONS_DATA_PRUNE: ${EXECUTIONS_DATA_PRUNE}
-      EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE}
-     
-
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: ${N8N_PORT:-5678}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
     volumes:
       - n8n_data:/home/node/.n8n
-
-    networks:
-      - football_backend
+    logging: *default-logging
+    networks: [football_private]
 
   adminer:
-    image: adminer:latest
+    image: adminer:5-standalone
+    profiles: ["tools"]
     container_name: football-adminer
     restart: unless-stopped
-
     depends_on:
       postgres:
         condition: service_healthy
-
-    ports:
-      - "8080:8080"
-
-    networks:
-      - football_backend
+    expose: ["8080"]
+    logging: *default-logging
+    networks: [football_private]
 
 volumes:
   postgres_data:
     name: football_postgres_data
-
   n8n_data:
     name: football_n8n_data
-    
-  frontend_node_modules:
-    name: football_frontend_node_modules   
+  caddy_data:
+  caddy_config:
 
-  frontend_next:
-    name: football_frontend_next   
 networks:
-  football_backend:
-    name: football_backend
-
+  football_edge:
+    internal: true
+  football_private:
+    internal: true

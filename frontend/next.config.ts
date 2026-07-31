@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["192.168.3.101"],
+  output: "standalone",
 
   images: {
     remotePatterns: [
@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://collector:8000/api/:path*",
+        destination: "http://api:8000/api/:path*",
       },
     ];
   },
