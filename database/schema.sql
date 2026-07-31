@@ -1692,3 +1692,33 @@ ALTER TABLE ONLY raw.api_payloads
 
 \unrestrict vT9OyDk4OROIxTGFz2xlNyeTB9jhluwAk3ONoSJAxCsMEec0WM9fiMFIZUcZ1ld
 
+-- v1 foundation: durable background job queue (migration 008_add_job_queue.sql)
+CREATE TABLE core.schema_migrations (
+    version text PRIMARY KEY,
+    checksum text NOT NULL,
+    applied_at timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE TABLE core.jobs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_type text NOT NULL,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'retry', 'dead_letter')),
+    idempotency_key text NOT NULL,
+    attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    max_attempts integer NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+    run_after timestamp with time zone NOT NULL DEFAULT now(),
+    timeout_seconds integer NOT NULL DEFAULT 300 CHECK (timeout_seconds > 0),
+    lease_expires_at timestamp with time zone,
+    heartbeat_at timestamp with time zone,
+    locked_by text,
+    last_error text,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    UNIQUE (job_type, idempotency_key)
+);
+
+CREATE INDEX idx_jobs_claimable ON core.jobs (status, run_after, created_at) WHERE status IN ('queued', 'retry');
+CREATE INDEX idx_jobs_leases ON core.jobs (lease_expires_at) WHERE status = 'running';
