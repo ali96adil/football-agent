@@ -1,23 +1,39 @@
-FROM node:22-alpine AS dependencies
+# syntax=docker/dockerfile:1.7
+
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+
+FROM --platform=$BUILDPLATFORM node:22-alpine AS dependencies
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
 WORKDIR /app
 COPY package*.json ./
+# Next standalone traces platform-native packages such as sharp. Refuse a
+# cross-build before npm runs so an x86 build can never populate an ARM image.
+RUN test -n "$BUILDPLATFORM" \
+    && test -n "$TARGETPLATFORM" \
+    && test "$BUILDPLATFORM" = "$TARGETPLATFORM" \
+    || (echo "frontend runtime images require a native builder: BUILDPLATFORM=$BUILDPLATFORM TARGETPLATFORM=$TARGETPLATFORM" >&2; exit 1)
 RUN npm ci
 
-FROM node:22-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runner
+FROM --platform=$TARGETPLATFORM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN addgroup -S nextjs && adduser -S nextjs -G nextjs
-COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nextjs /app/public ./public
-USER nextjs
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
+USER node
 EXPOSE 3000
+HEALTHCHECK --interval=20s --timeout=5s --start-period=30s --retries=5 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 CMD ["node", "server.js"]
