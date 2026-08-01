@@ -33,7 +33,7 @@ logger = logging.getLogger("football-collector")
 app = FastAPI(
     title="Football Intelligence Collector",
     description="Data collection service for the Football Intelligence Platform.",
-    version=os.getenv("APP_VERSION", "1.0.0-dev.2"),
+    version=os.getenv("APP_VERSION", "1.0.0-dev.5"),
     lifespan=lifespan,
 )
 
@@ -82,7 +82,7 @@ async def root() -> dict[str, str]:
     return {
         "service": "football-collector",
         "status": "running",
-        "version": os.getenv("APP_VERSION", "1.0.0-dev.2"),
+        "version": os.getenv("APP_VERSION", "1.0.0-dev.5"),
         "revision": os.getenv("GIT_REVISION", "unknown"),
     }
 

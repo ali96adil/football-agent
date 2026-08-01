@@ -25,7 +25,7 @@ export default function LoginPage() {
       <label className="mb-2 block text-sm">كلمة المرور</label><input dir="ltr" type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} className="mb-5 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 outline-none focus:border-cyan-400" required />
       {error && <p role="alert" className="mb-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p>}
       <button disabled={busy} className="w-full rounded-xl bg-cyan-500 py-3 font-bold text-slate-950 disabled:opacity-50">{busy ? "جارٍ الدخول…" : "تسجيل الدخول"}</button>
-      <p className="mt-6 text-center text-xs text-slate-500">جلسة آمنة بصلاحيات محددة — 1.0.0-dev.3</p>
+      <p className="mt-6 text-center text-xs text-slate-500">جلسة آمنة بصلاحيات محددة — 1.0.0-dev.5</p>
     </form>
   </main>;
 }

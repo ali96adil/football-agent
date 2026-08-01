@@ -89,7 +89,7 @@ export default function AppSidebar() {
       </nav>
 
       <div className="border-t p-4 text-xs text-muted-foreground">
-        <span dir="ltr">1.0.0-dev.3</span>
+        <span dir="ltr">1.0.0-dev.5</span>
       </div>
     </aside>
   );
