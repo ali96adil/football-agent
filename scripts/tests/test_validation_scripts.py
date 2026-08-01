@@ -190,6 +190,13 @@ class ComposeRuntimeTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "proxy must join football_ingress"):
             ci_assert_compose.assert_compose_model(model)
 
+    def test_loopback_only_proxy_port_is_rejected(self) -> None:
+        model = copy.deepcopy(self.model)
+        model["services"]["proxy"]["ports"][0]["host_ip"] = "127.0.0.1"
+
+        with self.assertRaisesRegex(SystemExit, "listen on the LAN"):
+            ci_assert_compose.assert_compose_model(model)
+
     def test_worker_script_path_invocation_is_rejected(self) -> None:
         model = copy.deepcopy(self.model)
         model["services"]["worker"]["command"] = ["python", "scripts/worker.py"]

@@ -52,6 +52,12 @@ def assert_compose_model(model: dict) -> None:
 
     published = sorted(name for name, service in services.items() if service.get("ports"))
     require(published == ["proxy"], f"only proxy may publish ports, got {published}")
+    proxy_ports = services["proxy"]["ports"]
+    require(len(proxy_ports) == 1, "proxy must publish exactly one port")
+    require(
+        proxy_ports[0].get("host_ip") == "0.0.0.0",
+        "proxy HTTP port must listen on the LAN, not loopback only",
+    )
 
     private_name = next(
         name for name in networks if name == "football_private" or name.endswith("_football_private")
