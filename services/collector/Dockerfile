@@ -9,13 +9,14 @@ WORKDIR /app
 RUN groupadd --system collector \
     && useradd --system --gid collector --home-dir /app collector
 
-COPY requirements.txt .
+COPY services/collector/requirements.txt ./requirements.txt
 
 RUN pip install --upgrade pip \
     && pip install --requirement requirements.txt
 
-COPY app ./app
-COPY scripts ./scripts
+COPY services/collector/app ./app
+COPY services/collector/scripts ./scripts
+COPY database ./database
 
 RUN chown -R collector:collector /app
 

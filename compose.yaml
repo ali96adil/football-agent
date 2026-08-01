@@ -112,7 +112,7 @@ services:
     mem_limit: ${API_MEMORY_LIMIT:-512m}
     cpus: ${API_CPU_LIMIT:-0.75}
     logging: *default-logging
-    networks: [football_edge, football_private]
+    networks: [football_edge, football_private, football_egress]
 
   worker:
     build:
@@ -136,7 +136,7 @@ services:
     mem_limit: ${WORKER_MEMORY_LIMIT:-320m}
     cpus: ${WORKER_CPU_LIMIT:-0.50}
     logging: *default-logging
-    networks: [football_private]
+    networks: [football_private, football_egress]
 
   frontend:
     build:
@@ -162,7 +162,7 @@ services:
     mem_limit: ${FRONTEND_MEMORY_LIMIT:-420m}
     cpus: ${FRONTEND_CPU_LIMIT:-0.75}
     logging: *default-logging
-    networks: [football_edge]
+    networks: [football_edge, football_egress]
 
   # Retained for a reversible transition. Never started by default.
   n8n:
@@ -191,7 +191,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     logging: *default-logging
-    networks: [football_private]
+    networks: [football_private, football_egress]
 
   adminer:
     image: adminer:5-standalone
@@ -218,3 +218,6 @@ networks:
     internal: true
   football_private:
     internal: true
+  # No service publishes a port through this network. It only provides NAT
+  # egress for provider APIs, Telegram, and remote frontend assets.
+  football_egress:

@@ -4,6 +4,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
 
   images: {
+    // The Pi container has a read-only root filesystem. Serving the original
+    // remote asset avoids Next's writable image-cache requirement and saves
+    // CPU on the Pi; the browser still fetches the allowed HTTPS image.
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: "https",

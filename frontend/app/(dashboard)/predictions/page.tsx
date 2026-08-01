@@ -10,10 +10,12 @@ import {
 import { PredictionCard } from "@/components/predictions/prediction-card";
 
 type TabDefinition = {
-  value: PredictionView;
+  value: PredictionTabView;
   label: string;
   description: string;
 };
+
+type PredictionTabView = Exclude<PredictionView, "all">;
 
 const tabs: TabDefinition[] = [
   {
@@ -32,7 +34,7 @@ const tabs: TabDefinition[] = [
 
 export default function PredictionsPage() {
   const [activeView, setActiveView] =
-    useState<PredictionView>("upcoming");
+    useState<PredictionTabView>("upcoming");
 
   const {
     data: predictions = [],
