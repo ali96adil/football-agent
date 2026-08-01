@@ -21,6 +21,17 @@ class MigrationManifestTests(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
             self.assertEqual(len(migrate.checksum(path)), 64)
 
+    def test_only_known_legacy_files_have_transaction_control(self):
+        for version, path in migrate.MIGRATIONS:
+            normalized = migrate.normalize_sql(version, path.read_text())
+            self.assertFalse(
+                any(migrate.TRANSACTION_CONTROL.fullmatch(line) for line in normalized.splitlines())
+            )
+
+    def test_new_transaction_control_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            migrate.normalize_sql("009_new", "BEGIN;\nSELECT 1;\nCOMMIT;\n")
+
     def test_project_database_is_a_hard_guard(self):
         previous = os.environ.get("APP_DB_NAME")
         os.environ["APP_DB_NAME"] = "n8n"
