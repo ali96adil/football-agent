@@ -105,3 +105,9 @@ class MigrationManifestTests(unittest.TestCase):
         self.assertIn("result JSONB", content)
         self.assertIn("requested_by", content)
         self.assertIn("core.system_settings", content)
+
+    def test_telegram_migration_has_explicit_user_allowlist(self):
+        content = (ROOT / "database/migrations/012_add_telegram_integration.sql").read_text()
+        self.assertIn("core.telegram_identities", content)
+        self.assertIn("chat_id BIGINT PRIMARY KEY", content)
+        self.assertIn("REFERENCES core.users", content)
