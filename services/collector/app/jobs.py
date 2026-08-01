@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from psycopg.types.json import Jsonb
+
 
 @dataclass(frozen=True)
 class Job:
@@ -40,7 +42,13 @@ class JobQueue:
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (job_type, idempotency_key) DO NOTHING
                     """,
-                    (job_type, idempotency_key, payload or {}, max_attempts, timeout_seconds),
+                    (
+                        job_type,
+                        idempotency_key,
+                        Jsonb(payload or {}),
+                        max_attempts,
+                        timeout_seconds,
+                    ),
                 )
         return result.rowcount == 1
 
