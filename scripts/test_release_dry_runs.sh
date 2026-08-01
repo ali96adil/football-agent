@@ -36,4 +36,5 @@ git rev-parse HEAD > .last-known-good-revision
 PREFLIGHT_SKIP_RUNTIME=1 ./scripts/deploy.sh --first-upgrade --dry-run \
   | grep -q "no containers were stopped or changed"
 ./scripts/rollback.sh --dry-run | grep -q "no container was changed"
+./scripts/test_deploy_health_scenarios.sh
 echo "Deploy and rollback dry-run safety tests passed."
