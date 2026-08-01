@@ -32,6 +32,8 @@ MIGRATION_PATHS = (
     ("010_add_auth_rbac", "database/migrations/010_add_auth_rbac.sql"),
     ("011_add_product_operations", "database/migrations/011_add_product_operations.sql"),
     ("012_add_telegram_integration", "database/migrations/012_add_telegram_integration.sql"),
+    ("013_add_telegram_destinations", "database/migrations/013_add_telegram_destinations.sql"),
+    ("014_extend_data_sources", "database/migrations/014_extend_data_sources.sql"),
 )
 
 # These files predate the atomic runner and may already be recorded by checksum

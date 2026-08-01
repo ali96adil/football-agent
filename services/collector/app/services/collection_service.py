@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
 
-from app.config import build_provider_endpoint, get_provider_settings
+from app.config import get_provider_settings
 from app.db.connection import pool
 from app.providers import provider_manager
 
@@ -24,14 +25,39 @@ class CollectionService:
         ttl: timedelta,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        provider_settings = get_provider_settings(provider)
+        async with pool.connection() as connection:
+            source_result = await connection.execute(
+                """SELECT id, enabled, base_url, secret_ciphertext
+                     FROM core.data_sources
+                    WHERE provider=%s OR (provider IS NULL AND code=%s)
+                    ORDER BY enabled DESC, priority DESC, id
+                    LIMIT 1""",
+                (provider, provider),
+            )
+            source = await source_result.fetchone()
+            if not source:
+                raise HTTPException(status_code=500, detail=f"{provider} source is missing")
+            if not source["enabled"]:
+                raise HTTPException(status_code=409, detail=f"{provider} source is disabled")
+            stored_api_key = None
+            if source["secret_ciphertext"] is not None:
+                encryption_key = os.getenv("SOURCE_SECRET_ENCRYPTION_KEY", "")
+                if len(encryption_key) < 32:
+                    raise HTTPException(status_code=503, detail="source secret storage is not configured")
+                decrypted = await connection.execute(
+                    "SELECT pgp_sym_decrypt(%s,%s) AS value",
+                    (source["secret_ciphertext"], encryption_key),
+                )
+                stored_api_key = (await decrypted.fetchone())["value"]
 
-        resolved_endpoint = build_provider_endpoint(
-            provider,
-            endpoint,
-        )
-
-        resolved_api_key = api_key or provider_settings.api_key
+        provider_settings = None
+        if not source["base_url"] or not (stored_api_key or api_key):
+            provider_settings = get_provider_settings(provider)
+        fallback_base_url = provider_settings.base_url if provider_settings else ""
+        fallback_api_key = provider_settings.api_key if provider_settings else ""
+        base_url = (source["base_url"] or fallback_base_url).rstrip("/")
+        resolved_endpoint = endpoint if endpoint.startswith(("http://", "https://")) else f"{base_url}/{endpoint.lstrip('/')}"
+        resolved_api_key = stored_api_key or api_key or fallback_api_key
 
         request_key_source = json.dumps(
             {
@@ -85,30 +111,6 @@ class CollectionService:
                 )
 
         async with pool.connection() as connection:
-
-            source_result = await connection.execute(
-                """
-                SELECT id, enabled
-                FROM core.data_sources
-                WHERE code=%s
-                LIMIT 1
-                """,
-                (provider,),
-            )
-
-            source = await source_result.fetchone()
-
-            if not source:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"{provider} source is missing",
-                )
-
-            if not source["enabled"]:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"{provider} source is disabled",
-                )
 
             expires_at = datetime.now(
                 timezone.utc

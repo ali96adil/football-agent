@@ -62,12 +62,18 @@ class PredictionQueryRepository:
              
             """
 
+        order_clause = (
+            "mp.kickoff_at ASC NULLS LAST, mp.fixture_id ASC"
+            if view == "upcoming"
+            else "mp.kickoff_at DESC NULLS LAST, mp.fixture_id ASC"
+        )
+
         query = f"""
             {PREDICTION_SELECT}
 
             {where_clause}
 
-            ORDER BY mp.kickoff_at DESC
+            ORDER BY {order_clause}
             LIMIT %s
             OFFSET %s;
         """

@@ -51,7 +51,10 @@ export default function FixturesPage() {
     sort: "upcoming",
   })
 
-  const fixtures = fixturesQuery.data?.items ?? []
+  const fixtures = useMemo(
+    () => fixturesQuery.data?.items ?? [],
+    [fixturesQuery.data?.items],
+  )
   const total = fixturesQuery.data?.total ?? 0
   const totalPages =
     fixturesQuery.data?.total_pages ?? 1

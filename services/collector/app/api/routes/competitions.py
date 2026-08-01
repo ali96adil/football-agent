@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.db.connection import pool
+from app.job_errors import safe_failure
 from app.repositories.entities import upsert_competition, upsert_season
 from app.services import collection_service
 
@@ -28,7 +29,7 @@ async def sync_football_data_competitions() -> dict[str, Any]:
             detail="FOOTBALL_DATA_API_KEY is not configured",
         )
 
-    endpoint = "https://api.football-data.org/v4/competitions"
+    endpoint = "/competitions"
     params: dict[str, str] = {}
 
     collection_result = await collection_service.collect(
@@ -46,15 +47,13 @@ async def sync_football_data_competitions() -> dict[str, Any]:
     response_status = collection_result["response_status"]
     payload = collection_result["payload"]
     stored_payload = collection_result["raw_payload"]
-    error_message = collection_result["error_message"]
 
     if response_status >= 400:
         raise HTTPException(
             status_code=response_status,
             detail={
-                "message": error_message,
+                **safe_failure(HTTPException(status_code=response_status)),
                 "raw_payload_id": stored_payload["id"],
-                "provider_response": payload,
             },
         )
 
@@ -107,7 +106,7 @@ async def sync_football_data_competitions() -> dict[str, Any]:
                             "football_data_id": competition_data.get("id"),
                             "code": competition_data.get("code"),
                             "name": competition_data.get("name"),
-                            "error": str(exc),
+                            **safe_failure(exc),
                         }
                     )
 

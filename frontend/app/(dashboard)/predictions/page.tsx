@@ -8,6 +8,7 @@ import {
   PredictionView,
 } from "@/services/predictions";
 import { PredictionCard } from "@/components/predictions/prediction-card";
+import { Prediction } from "@/types/prediction";
 
 type TabDefinition = {
   value: PredictionTabView;
@@ -32,6 +33,15 @@ const tabs: TabDefinition[] = [
   },
 ];
 
+export function sortUpcomingPredictions(items: Prediction[]): Prediction[] {
+  return [...items].sort((left,right)=>{
+    const leftTime=Date.parse(left.kickoff_at); const rightTime=Date.parse(right.kickoff_at);
+    if (Number.isNaN(leftTime)) return Number.isNaN(rightTime)?left.fixture_id.localeCompare(right.fixture_id):1;
+    if (Number.isNaN(rightTime)) return -1;
+    return leftTime-rightTime || left.fixture_id.localeCompare(right.fixture_id);
+  });
+}
+
 export default function PredictionsPage() {
   const [activeView, setActiveView] =
     useState<PredictionTabView>("upcoming");
@@ -50,6 +60,7 @@ export default function PredictionsPage() {
   const activeTab =
     tabs.find((tab) => tab.value === activeView) ??
     tabs[0];
+  const visiblePredictions = activeView === "upcoming" ? sortUpcomingPredictions(predictions) : predictions;
 
   return (
     <div className="space-y-6">
@@ -121,8 +132,8 @@ export default function PredictionsPage() {
 
           {!isLoading && !error && (
             <div className="text-sm text-muted-foreground">
-              {predictions.length}{" "}
-              {predictions.length === 1
+              {visiblePredictions.length}{" "}
+              {visiblePredictions.length === 1
                 ? "prediction"
                 : "predictions"}
             </div>
@@ -159,7 +170,7 @@ export default function PredictionsPage() {
               Try again
             </button>
           </div>
-        ) : predictions.length === 0 ? (
+        ) : visiblePredictions.length === 0 ? (
           <div className="rounded-2xl border border-dashed p-10 text-center">
             <h3 className="font-semibold">
               No {activeView} predictions
@@ -173,7 +184,7 @@ export default function PredictionsPage() {
           </div>
         ) : (
           <div className="grid gap-6">
-            {predictions.map((prediction) => (
+            {visiblePredictions.map((prediction) => (
               <PredictionCard
                 key={prediction.id}
                 prediction={prediction}

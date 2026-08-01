@@ -38,10 +38,16 @@ if [[ "$mode" == "regular" ]]; then
 fi
 
 compose=(docker compose --env-file .env)
+telegram_enabled="$("${compose[@]}" --profile telegram config --format json | python3 -c 'import json,sys; m=json.load(sys.stdin); print("1" if (m.get("services",{}).get("telegram",{}).get("environment",{}).get("TELEGRAM_BOT_TOKEN") or "").strip() else "0")' 2>/dev/null || printf 0)"
+if [[ "$telegram_enabled" == "1" ]]; then
+  compose+=(--profile telegram)
+fi
 echo "Pulling pinned runtime images before changing containers."
 "${compose[@]}" pull postgres proxy
 echo "Building every local production service before changing containers."
-"${compose[@]}" build --pull api worker migrate frontend
+build_services=(api worker migrate frontend)
+[[ "$telegram_enabled" == "1" ]] && build_services+=(telegram)
+"${compose[@]}" build --pull "${build_services[@]}"
 
 compose_json="$("${compose[@]}" config --format json)"
 app_db_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["migrate"]["environment"]["APP_DB_USER"])' <<<"$compose_json")"
@@ -67,7 +73,9 @@ if [[ "$mode" == "first-upgrade" ]]; then
 fi
 
 echo "Starting Foundation services; --remove-orphans is safe after project/volume preflight."
-if ! "${compose[@]}" up -d --remove-orphans --no-build --no-deps postgres api worker frontend proxy \
+up_services=(postgres api worker frontend proxy)
+[[ "$telegram_enabled" == "1" ]] && up_services+=(telegram)
+if ! "${compose[@]}" up -d --remove-orphans --no-build --no-deps "${up_services[@]}" \
   || ! ./scripts/verify-health.sh; then
   echo "Deployment health failed; invoking the validated rollback target." >&2
   ./scripts/rollback.sh || true

@@ -76,7 +76,6 @@ async def collect_football_data_standings(
     response_status = collection_result["response_status"]
     payload = collection_result["payload"]
     raw_payload = collection_result["raw_payload"]
-    error_message = collection_result["error_message"]
     
 
 
@@ -84,9 +83,9 @@ async def collect_football_data_standings(
         raise HTTPException(
             status_code=response_status,
             detail={
-                "message": error_message,
+                "reason": "http_status",
+                "http_status": response_status,
                 "raw_payload_id": raw_payload["id"],
-                "provider_response": payload,
             },
         )
 

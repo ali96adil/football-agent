@@ -71,7 +71,7 @@ async def get_completed_fixtures_for_team(
             away_score
         FROM core.fixtures
         WHERE {" AND ".join(conditions)}
-        ORDER BY kickoff_at DESC, id DESC
+        ORDER BY kickoff_at DESC NULLS LAST, id DESC
         LIMIT %s
     """
 
@@ -263,7 +263,7 @@ async def get_scheduled_fixtures(
             fixture_status
         FROM core.fixtures
         WHERE {" AND ".join(conditions)}
-        ORDER BY kickoff_at ASC, id ASC
+        ORDER BY kickoff_at ASC NULLS LAST, id ASC
         LIMIT %s
     """
 

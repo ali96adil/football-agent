@@ -38,6 +38,32 @@ class ProductUISourceTests(unittest.TestCase):
         self.assertIn("data.system.revision", dashboard)
         self.assertIn("user?.role", header)
 
+    def test_mobile_navigation_is_accessible_and_closable(self):
+        header = (ROOT / "frontend/components/layout/app-header.tsx").read_text()
+        sidebar = (ROOT / "frontend/components/layout/app-sidebar.tsx").read_text()
+        for marker in ('aria-expanded={menuOpen}', 'aria-controls="mobile-navigation"'):
+            self.assertIn(marker, header)
+        for marker in ('event.key === "Escape"', 'document.body.style.overflow = "hidden"',
+                       'onClick={onClose}', 'id="mobile-navigation"'):
+            self.assertIn(marker, sidebar)
+
+    def test_source_admin_ui_never_reads_a_saved_secret(self):
+        page = (ROOT / "frontend/app/(dashboard)/sources/page.tsx").read_text()
+        service = (ROOT / "frontend/services/operations.ts").read_text()
+        self.assertIn('type="password"', page)
+        self.assertIn("secret_configured", page)
+        self.assertNotIn("s.secret}", page)
+        for operation in ("createSource", "replaceSource", "testSource"):
+            self.assertIn(operation, service)
+
+    def test_prediction_time_is_rendered_in_baghdad(self):
+        card = (ROOT / "frontend/components/predictions/prediction-card.tsx").read_text()
+        page = (ROOT / "frontend/app/(dashboard)/predictions/page.tsx").read_text()
+        self.assertIn('timeZone: "Asia/Baghdad"', card)
+        self.assertIn("sortUpcomingPredictions", page)
+        self.assertIn("leftTime-rightTime", page)
+        self.assertIn("fixture_id.localeCompare", page)
+
 
 if __name__ == "__main__":
     unittest.main()

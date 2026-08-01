@@ -24,6 +24,20 @@ class JobQueue:
     """Lease-based queue safe for more than one worker process."""
 
     @staticmethod
+    async def reserve_sync_slot(connection: Any) -> bool:
+        """Serialize checks and reject any overlapping sync pipeline."""
+        await connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtext('football-agent:sync-pipeline'))"
+        )
+        active = await connection.execute(
+            """SELECT 1 FROM core.jobs
+                 WHERE job_type='sync_pipeline'
+                   AND status IN ('queued','running','retry')
+                 LIMIT 1"""
+        )
+        return await active.fetchone() is None
+
+    @staticmethod
     async def enqueue(
         pool: Any,
         *,
@@ -36,6 +50,11 @@ class JobQueue:
         """Insert once for a stable external-operation idempotency key."""
         async with pool.connection() as connection:
             async with connection.transaction():
+                if job_type == "sync_pipeline":
+                    # Serialize manual and scheduled syncs, whose external side
+                    # effects are idempotent but expensive and rate limited.
+                    if not await JobQueue.reserve_sync_slot(connection):
+                        return False
                 result = await connection.execute(
                     """
                     INSERT INTO core.jobs (job_type, idempotency_key, payload, max_attempts, timeout_seconds)
@@ -141,7 +160,10 @@ class JobQueue:
         return result.rowcount == 1
 
     @staticmethod
-    async def fail(pool: Any, *, job: Job, error: str) -> bool:
+    async def fail(
+        pool: Any, *, job: Job, error: str,
+        failure_payload: dict[str, Any] | None = None,
+    ) -> bool:
         """Commit a retry or dead-letter transition in its own transaction."""
         async with pool.connection() as connection:
             async with connection.transaction():
@@ -153,9 +175,9 @@ class JobQueue:
                                             ELSE NOW() + (LEAST(300, 5 * attempt_count) * INTERVAL '1 second') END,
                            finished_at = CASE WHEN attempt_count >= max_attempts THEN NOW() ELSE NULL END,
                            locked_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
-                           last_error = %s, updated_at = NOW()
+                           last_error = %s, result = %s, updated_at = NOW()
                      WHERE id = %s AND status = 'running' AND locked_by = %s
                     """,
-                    (error[:4000], job.id, job.owner_token),
+                    (error[:4000], Jsonb(failure_payload or {}), job.id, job.owner_token),
                 )
         return result.rowcount == 1

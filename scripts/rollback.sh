@@ -42,6 +42,11 @@ fi
 previous=(docker compose --project-name football-agent --project-directory "$release_dir" \
   --env-file "$root/.env" -f "$release_dir/compose.yaml")
 current=(docker compose --env-file "$root/.env" -f "$root/compose.yaml")
+telegram_enabled="$(docker compose --env-file "$root/.env" -f "$root/compose.yaml" --profile telegram config --format json | python3 -c 'import json,sys; m=json.load(sys.stdin); print("1" if (m.get("services",{}).get("telegram",{}).get("environment",{}).get("TELEGRAM_BOT_TOKEN") or "").strip() else "0")' 2>/dev/null || printf 0)"
+if [[ "$telegram_enabled" == "1" ]]; then
+  previous+=(--profile telegram)
+  current+=(--profile telegram)
+fi
 
 echo "Preparing previous release before replacing the current release."
 "${previous[@]}" config --quiet
@@ -96,7 +101,9 @@ if "${previous[@]}" up -d --remove-orphans --no-build && verify_previous_release
 fi
 
 echo "ROLLBACK FAILED. Attempting to restore the current Foundation services so the host is not left stopped." >&2
-if "${current[@]}" up -d --remove-orphans --no-build postgres api worker frontend proxy \
+rescue_services=(postgres api worker frontend proxy)
+[[ "$telegram_enabled" == "1" ]] && rescue_services+=(telegram)
+if "${current[@]}" up -d --remove-orphans --no-build "${rescue_services[@]}" \
   && "$root/scripts/verify-health.sh"; then
   echo "Rescue succeeded: current Foundation release is running. Inspect previous-release build and container logs before retrying." >&2
 else

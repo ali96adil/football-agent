@@ -12,6 +12,7 @@ from app.repositories.fixtures_repository import (
     get_scheduled_fixtures,
 )
 from app.services.snapshot_service import SnapshotService
+from app.job_errors import safe_failure
 
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,13 @@ class ScheduledPredictionService:
                     skipped += 1
 
             except Exception as error:
+                if isinstance(error, ValueError) and str(error).startswith("No completed matches found"):
+                    skipped += 1
+                    items.append({"fixture_id":str(fixture.fixture_id),"status":"skipped","reason":"insufficient_data"})
+                    continue
                 failed += 1
+
+                failure = safe_failure(error)
 
                 error_item = {
                     "fixture_id": str(fixture.fixture_id),
@@ -117,7 +124,7 @@ class ScheduledPredictionService:
                         fixture.kickoff_at.isoformat()
                     ),
                     "error_type": type(error).__name__,
-                    "message": str(error),
+                    **failure,
                 }
 
                 errors.append(error_item)
@@ -128,17 +135,13 @@ class ScheduledPredictionService:
                             fixture.fixture_id
                         ),
                         "status": "failed",
-                        "reason": (
-                            f"{type(error).__name__}: "
-                            f"{error}"
-                        ),
+                        "reason": failure["reason"],
                     }
                 )
 
-                logger.exception(
-                    "Scheduled prediction failed: "
-                    "fixture_id=%s",
-                    fixture.fixture_id,
+                logger.error(
+                    "Scheduled prediction failed: fixture_id=%s error_type=%s reason=%s",
+                    fixture.fixture_id, type(error).__name__, failure["reason"],
                 )
 
         status = cls._determine_status(

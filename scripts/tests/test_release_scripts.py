@@ -21,6 +21,14 @@ class RollbackSafetyTests(unittest.TestCase):
         self.assertIn(".RestartCount", script)
         self.assertIn('[[ "$stable_checks" -ge 3 ]] && return 0', script)
 
+    def test_deploy_and_rollback_preserve_configured_telegram_service(self) -> None:
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+        rollback = (ROOT / "scripts" / "rollback.sh").read_text(encoding="utf-8")
+        for script in (deploy, rollback):
+            self.assertIn("telegram_enabled", script)
+            self.assertIn("--profile telegram", script)
+            self.assertIn('+=(telegram)', script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ import {
   Clock3,
   Trophy,
 } from "lucide-react"
+import Image from "next/image"
 
 import { FixtureStatus } from "@/components/fixtures/fixture-status"
 
@@ -40,11 +41,13 @@ function TeamLogo({
 
   if (logo) {
     return (
-      <img
+      <Image
         src={logo}
         alt={team.name}
+        width={56}
+        height={56}
+        unoptimized
         className="h-14 w-14 object-contain"
-        loading="lazy"
       />
     )
   }
@@ -86,11 +89,13 @@ export function FixtureCard({
         <div className="flex min-w-0 items-center gap-3">
 
           {competition.logo ? (
-            <img
+            <Image
               src={competition.logo}
               alt={competition.name}
+              width={32}
+              height={32}
+              unoptimized
               className="h-8 w-8 shrink-0 object-contain"
-              loading="lazy"
             />
           ) : (
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800">

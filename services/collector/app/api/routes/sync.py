@@ -17,6 +17,7 @@ from app.api.routes.standings import (
     sync_football_data_standings,
 )
 from app.db.connection import pool
+from app.job_errors import safe_failure
 from app.services.prediction_evaluation_service import (
     PredictionEvaluationService,
 )
@@ -179,7 +180,7 @@ async def sync_all(
         error_item: dict[str, Any] = {
             "stage": stage,
             "error_type": type(exc).__name__,
-            "error": str(exc),
+            **safe_failure(exc),
         }
 
         if isinstance(exc, HTTPException):
@@ -212,7 +213,7 @@ async def sync_all(
         result["competitions"] = {
             "status": "failed",
             "error_type": type(exc).__name__,
-            "error": str(exc),
+            **safe_failure(exc),
         }
 
     # ------------------------------------------------------------------
@@ -467,7 +468,7 @@ async def sync_all(
                     "date_from": window_start.isoformat(),
                     "date_to": window_end.isoformat(),
                     "error_type": type(exc).__name__,
-                    "error": str(exc),
+                    **safe_failure(exc),
                     "duration_seconds": window_duration,
                 }
 
@@ -589,7 +590,7 @@ async def sync_all(
                     "canonical_name"
                 ],
                 "error_type": type(exc).__name__,
-                "error": str(exc),
+                **safe_failure(exc),
             }
 
             result["standings"]["errors"].append(
@@ -629,7 +630,7 @@ async def sync_all(
         result["evaluation"] = {
             "status": "failed",
             "error_type": type(exc).__name__,
-            "error": str(exc),
+            **safe_failure(exc),
         }
 
     # ------------------------------------------------------------------
@@ -667,7 +668,7 @@ async def sync_all(
         result["predictions"] = {
             "status": "failed",
             "error_type": type(exc).__name__,
-            "error": str(exc),
+            **safe_failure(exc),
         }
 
     # ------------------------------------------------------------------

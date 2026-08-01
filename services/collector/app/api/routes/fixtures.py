@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db.connection import pool
+from app.job_errors import safe_failure
 from app.normalizers.fixtures import normalize_fixture
 from app.providers import provider_manager
 from app.services import collection_service
@@ -75,7 +76,7 @@ async def collect_football_data_fixtures(
     if competitions:
         params["competitions"] = competitions.strip().upper()
 
-    endpoint = "https://api.football-data.org/v4/matches"
+    endpoint = "/matches"
 
     collection_result = await collection_service.collect(
         provider="football_data",
@@ -93,15 +94,13 @@ async def collect_football_data_fixtures(
     response_status = collection_result["response_status"]
     payload = collection_result["payload"]
     stored_payload = collection_result["raw_payload"]
-    error_message = collection_result["error_message"]
 
     if response_status >= 400:
         raise HTTPException(
             status_code=response_status,
             detail={
-                "message": error_message,
+                **safe_failure(HTTPException(status_code=response_status)),
                 "raw_payload_id": stored_payload["id"],
-                "provider_response": payload,
             },
         )
 
@@ -194,7 +193,7 @@ async def normalize_football_data_fixtures(
                     failed_matches.append(
                         {
                             "external_fixture_id": match.get("id"),
-                            "error": str(exc),
+                            **safe_failure(exc),
                         }
                     )
 
@@ -373,15 +372,13 @@ async def collect_api_football_fixtures(
     response_status = collection_result["response_status"]
     payload = collection_result["payload"]
     stored_payload = collection_result["raw_payload"]
-    error_message = collection_result["error_message"]
 
     if response_status >= 400:
         raise HTTPException(
             status_code=response_status,
             detail={
-                "message": error_message,
+                **safe_failure(HTTPException(status_code=response_status)),
                 "raw_payload_id": stored_payload["id"],
-                "provider_response": payload,
             },
         )
 
@@ -393,8 +390,7 @@ async def collect_api_football_fixtures(
             detail={
                 "message": "API-Football rejected the request",
                 "raw_payload_id": stored_payload["id"],
-                "provider_errors": provider_errors,
-                "parameters": payload.get("parameters"),
+                "reason": "authentication_failure",
             },
         )
 

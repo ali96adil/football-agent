@@ -4,15 +4,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
+
+import psycopg
 
 from app.db.connection import close_connection_pool, open_connection_pool, pool
+from app.config import build_database_url
 from app.jobs import Job, JobQueue
+from app.job_errors import JobExecutionError, safe_failure
 from app.operations import WorkerOperations
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("football-worker")
+
+
+def optional_uuid(payload: dict[str, Any], key: str) -> UUID | None:
+    """Parse an optional scope UUID without inventing collection context."""
+    value = payload.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"invalid {key} in job payload") from exc
 
 
 async def execute(job: Job) -> dict[str, Any]:
@@ -40,8 +57,12 @@ async def execute(job: Job) -> dict[str, Any]:
             if item.get("stage") in {"competitions", "load_competitions", "fixtures"}
         }
         if failed_collection_stages:
-            stages = ", ".join(sorted(failed_collection_stages))
-            raise RuntimeError(f"sync pipeline collection failed at: {stages}")
+            errors = [item for item in result.get("errors", []) if item.get("stage") in failed_collection_stages]
+            first = errors[0] if errors else {}
+            raise JobExecutionError(
+                str(first.get("reason", "dependency_failure")),
+                stage=", ".join(sorted(failed_collection_stages)),
+            )
         logger.info(
             "sync pipeline finished with status=%s duration=%s",
             result["status"],
@@ -54,7 +75,12 @@ async def execute(job: Job) -> dict[str, Any]:
 
         successful, failed = 0, 0
         async with pool.connection() as connection:
-            targets = await get_team_targets(connection, limit=int(job.payload.get("limit", 100)))
+            targets = await get_team_targets(
+                connection,
+                competition_id=optional_uuid(job.payload, "competition_id"),
+                season_id=optional_uuid(job.payload, "season_id"),
+                limit=int(job.payload.get("limit", 100)),
+            )
             for target in targets:
                 try:
                     await SnapshotService.build_and_save(
@@ -66,15 +92,20 @@ async def execute(job: Job) -> dict[str, Any]:
                     successful += 1
                 except Exception:
                     failed += 1
-        return {"status": "success" if failed == 0 else "partial_success", "successful": successful, "failed": failed}
+        if failed:
+            raise RuntimeError(f"snapshot generation failed for {failed} target(s)")
+        return {"status": "success", "successful": successful, "failed": failed}
     if job.job_type == "run_predictions":
         from app.services.scheduled_prediction_service import ScheduledPredictionService
         async with pool.connection() as connection:
-            return await ScheduledPredictionService.run(
+            result = await ScheduledPredictionService.run(
                 connection, days_ahead=int(job.payload.get("fixture_days", 14)),
                 limit=int(job.payload.get("limit", 100)), window_size=int(job.payload.get("window_size", 10)),
                 calculation_version=str(job.payload.get("calculation_version", "v1-product")),
             )
+            if result.get("status") == "partial_success":
+                raise RuntimeError("prediction generation completed with failures")
+            return result
     if job.job_type == "evaluate_predictions":
         from app.services.prediction_evaluation_service import PredictionEvaluationService
         async with pool.connection() as connection:
@@ -113,14 +144,37 @@ async def configured_sync_interval(default_seconds: int) -> int:
     return interval
 
 
-async def keep_lease(job: Job, *, worker_id: str, lease_seconds: int) -> None:
-    """Renew a long-running job lease without sharing its execution connection."""
-    while True:
-        await asyncio.sleep(max(1, lease_seconds // 3))
-        renewed = await JobQueue.heartbeat(pool, job=job, lease_seconds=lease_seconds)
-        if not renewed:
-            logger.warning("job %s lease ownership was lost", job.id)
-            return
+def keep_lease_sync(
+    job: Job, *, worker_id: str, lease_seconds: int, stop: threading.Event,
+) -> None:
+    """Renew ownership outside the worker event loop.
+
+    Prediction and snapshot calculation can temporarily monopolize the event
+    loop. A dedicated PostgreSQL connection prevents that from expiring a live
+    job and also keeps the worker heartbeat current during long handlers.
+    """
+    interval = max(1, lease_seconds // 3)
+    while not stop.wait(interval):
+        try:
+            with psycopg.connect(build_database_url(), autocommit=True) as connection:
+                result = connection.execute(
+                    """UPDATE core.jobs
+                          SET heartbeat_at=NOW(), lease_expires_at=NOW() + (%s * INTERVAL '1 second'),
+                              updated_at=NOW()
+                        WHERE id=%s AND status='running' AND locked_by=%s
+                          AND lease_expires_at > NOW()""",
+                    (lease_seconds, job.id, job.owner_token),
+                )
+                if result.rowcount != 1:
+                    logger.warning("job %s lease ownership was lost", job.id)
+                    return
+                connection.execute(
+                    """UPDATE core.worker_heartbeats SET heartbeat_at=NOW(), status='running',
+                              current_job_id=%s, updated_at=NOW() WHERE worker_id=%s""",
+                    (job.id, worker_id),
+                )
+        except Exception:
+            logger.exception("unable to renew lease for job %s", job.id)
 
 
 async def run() -> None:
@@ -171,25 +225,34 @@ async def run() -> None:
                 current_job_id=job.id,
                 metadata={"job_type": job.job_type},
             )
-            lease_task = asyncio.create_task(
-                keep_lease(job, worker_id=worker_id, lease_seconds=lease_seconds)
-            )
+            lease_stop = threading.Event()
+            lease_task = asyncio.create_task(asyncio.to_thread(
+                keep_lease_sync, job, worker_id=worker_id,
+                lease_seconds=lease_seconds, stop=lease_stop,
+            ))
             try:
                 result_payload = await asyncio.wait_for(execute(job), timeout=job.timeout_seconds)
             except TimeoutError:
                 logger.error("job %s exceeded its %s second timeout", job.id, job.timeout_seconds)
-                saved = await JobQueue.fail(pool, job=job, error="job timeout")
+                saved = await JobQueue.fail(
+                    pool, job=job, error="timeout",
+                    failure_payload={"reason": "timeout"},
+                )
             except Exception as exc:
-                logger.exception("job %s failed", job.id)
-                saved = await JobQueue.fail(pool, job=job, error=str(exc))
+                failure = safe_failure(exc)
+                logger.error(
+                    "job %s failed: error_type=%s reason=%s stage=%s",
+                    job.id, type(exc).__name__, failure["reason"], failure.get("stage", "—"),
+                )
+                detail = failure["reason"]
+                if failure.get("http_status"):
+                    detail += f" (HTTP {failure['http_status']})"
+                saved = await JobQueue.fail(pool, job=job, error=detail, failure_payload=failure)
             else:
                 saved = await JobQueue.complete(pool, job=job, result_payload=result_payload)
             finally:
-                lease_task.cancel()
-                try:
-                    await lease_task
-                except asyncio.CancelledError:
-                    pass
+                lease_stop.set()
+                await lease_task
             if not saved:
                 logger.error("job %s completion was rejected because lease ownership was lost", job.id)
     finally:

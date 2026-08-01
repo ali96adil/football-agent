@@ -118,13 +118,13 @@ check_migration() {
   local migration_status
   if ! migration_status="$("${compose[@]}" exec -T postgres \
     psql -v ON_ERROR_STOP=1 -U "$app_db_user" -d "$app_db_name" -tAc \
-      "SELECT CASE WHEN EXISTS (SELECT 1 FROM core.schema_migrations WHERE version = '012_add_telegram_integration') THEN 'ok' ELSE 'missing' END" \
+      "SELECT CASE WHEN EXISTS (SELECT 1 FROM core.schema_migrations WHERE version = '013_add_telegram_destinations') THEN 'ok' ELSE 'missing' END" \
     2>/dev/null)"; then
     failure_reason="migration verification query failed"
     return 1
   fi
   if ! tr -d '[:space:]' <<<"$migration_status" | grep -qx ok; then
-    failure_reason="migration 012_add_telegram_integration is missing"
+    failure_reason="migration 013_add_telegram_destinations is missing"
     return 1
   fi
 }

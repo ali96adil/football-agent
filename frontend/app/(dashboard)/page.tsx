@@ -187,7 +187,7 @@ export default function DashboardPage() {
         }).format(new Date(value))
       : "لا يوجد تحديث مسجل";
   const workerFresh = data.operations.worker
-    ? Date.now() - new Date(data.operations.worker.heartbeat_at).getTime() < 120000
+    ? dataUpdatedAt - new Date(data.operations.worker.heartbeat_at).getTime() < 120000
     : false;
 
   return (

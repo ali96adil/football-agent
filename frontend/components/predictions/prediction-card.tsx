@@ -57,6 +57,7 @@ function formatKickoff(kickoffAt: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: "Asia/Baghdad",
   }).format(new Date(kickoffAt));
 }
 

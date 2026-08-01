@@ -126,3 +126,13 @@ class PostgreSQLJobQueueIntegrationTests(unittest.IsolatedAsyncioTestCase):
             idempotency_key="provider-operation-42",
         )
         self.assertFalse(duplicate)
+
+    async def test_sync_pipeline_cannot_overlap_across_distinct_keys(self) -> None:
+        first = await JobQueue.enqueue(
+            self.pool, job_type="sync_pipeline", idempotency_key="manual-a"
+        )
+        second = await JobQueue.enqueue(
+            self.pool, job_type="sync_pipeline", idempotency_key="scheduled-b"
+        )
+        self.assertTrue(first)
+        self.assertFalse(second)

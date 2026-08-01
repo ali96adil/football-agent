@@ -111,3 +111,19 @@ class MigrationManifestTests(unittest.TestCase):
         self.assertIn("core.telegram_identities", content)
         self.assertIn("chat_id BIGINT PRIMARY KEY", content)
         self.assertIn("REFERENCES core.users", content)
+
+    def test_telegram_destinations_migration_separates_commands_and_delivery(self):
+        content = (ROOT / "database/migrations/013_add_telegram_destinations.sql").read_text()
+        rollback = (ROOT / "database/migrations/013_add_telegram_destinations.down.sql").read_text()
+        self.assertIn("PRIMARY KEY (chat_id, telegram_user_id)", content)
+        self.assertIn("core.telegram_destinations", content)
+        self.assertIn("activated_at", content)
+        self.assertIn("core.telegram_deliveries", content)
+        self.assertIn("content_hash", content)
+        self.assertIn("UNIQUE (destination_chat_id, event_key, content_hash)", content)
+        self.assertIn("Cannot roll back", rollback)
+
+    def test_source_management_migration_protects_secrets_and_scopes(self):
+        content = (ROOT / "database/migrations/014_extend_data_sources.sql").read_text()
+        for required in ("secret_ciphertext BYTEA", "capabilities TEXT[]"):
+            self.assertIn(required, content)
