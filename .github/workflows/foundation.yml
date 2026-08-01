@@ -82,7 +82,7 @@ jobs:
       - name: PostgreSQL queue concurrency and migration atomicity
         env:
           RUN_POSTGRES_INTEGRATION: "1"
-        run: python -m unittest tests.test_postgres_job_queue tests.test_postgres_migrations -v
+        run: python -m unittest tests.test_postgres_auth_rbac tests.test_postgres_job_queue tests.test_postgres_migrations -v
       - name: Migrate a current-schema fixture
         run: bash ../../scripts/ci-migrate-current-schema.sh
 
@@ -130,7 +130,7 @@ jobs:
             -f services/collector/Dockerfile -t football-api-ci .
           test "$(docker image inspect --format '{{.Architecture}}' football-api-ci)" = "arm64"
           docker run --rm --platform linux/arm64 --entrypoint python football-api-ci -c \
-            "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql','database/migrations/009_add_worker_operations.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
+            "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','scripts/create_admin.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql','database/migrations/009_add_worker_operations.sql','database/migrations/010_add_auth_rbac.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
       - name: Build and exercise the ARM64 frontend runtime
         run: |
           docker buildx build --platform linux/arm64 --load \

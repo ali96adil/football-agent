@@ -38,7 +38,8 @@ class DashboardService:
         return {
             "system": {
                 "status": "online",
-                "version": os.getenv("APP_VERSION", "1.0.0-dev.1"),
+                "version": os.getenv("APP_VERSION", "1.0.0-dev.2"),
+                "revision": os.getenv("GIT_REVISION", "unknown")[:12],
                 "release_stage": "development",
             },
             "stats": stats,

@@ -91,3 +91,11 @@ class MigrationManifestTests(unittest.TestCase):
         self.assertIn("core.worker_heartbeats", content)
         self.assertIn("next_sync_at", content)
         self.assertIn("current_job_id UUID REFERENCES core.jobs", content)
+
+    def test_auth_migration_has_sessions_rbac_and_audit(self):
+        content = (ROOT / "database/migrations/010_add_auth_rbac.sql").read_text()
+        for required in ("core.users", "core.user_sessions", "core.login_attempts", "core.audit_log"):
+            self.assertIn(required, content)
+        self.assertIn("admin", content)
+        self.assertIn("operator", content)
+        self.assertIn("viewer", content)
