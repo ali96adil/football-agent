@@ -45,21 +45,81 @@ TRANSACTION_CONTROL = re.compile(
 )
 
 
-def discover_root(explicit: str | None = None) -> Path:
-    if explicit:
-        root = Path(explicit).expanduser().resolve()
-        if not (root / "database/001_core_schema.sql").is_file():
-            raise RuntimeError(f"Invalid migrations root: {root}")
-        return root
+def _root_layout(root: Path) -> str | None:
+    """Return the supported layout at *root*, if any.
 
-    configured = os.getenv("MIGRATIONS_ROOT")
-    if configured:
-        return discover_root(configured)
+    Repository checkouts must contain both ``database/migrations`` and
+    ``services/collector``. The collector image intentionally flattens the
+    latter into ``/app``; that layout is accepted only at this script's own
+    collector root and must still contain ``database/migrations``.
+    """
+    if (root / "database/migrations").is_dir() and (root / "services/collector").is_dir():
+        return "repository"
+    if (
+        root == COLLECTOR_ROOT
+        and (root / "database/migrations").is_dir()
+        and (root / "app").is_dir()
+        and (root / "scripts/migrate.py").is_file()
+    ):
+        return "image"
+    return None
+
+
+def _validate_root(root: Path) -> Path:
+    resolved = root.expanduser().resolve()
+    if _root_layout(resolved) is None:
+        raise RuntimeError(
+            f"Invalid migrations root: {resolved}; expected database/migrations "
+            "and services/collector (or the collector image layout)"
+        )
+    return resolved
+
+
+def _default_root() -> Path:
+    workspace = os.getenv("GITHUB_WORKSPACE")
+    if workspace:
+        candidate = Path(workspace).expanduser().resolve()
+        if _root_layout(candidate) is not None:
+            return candidate
 
     for candidate in (COLLECTOR_ROOT, *COLLECTOR_ROOT.parents):
-        if (candidate / "database/001_core_schema.sql").is_file():
+        if _root_layout(candidate) is not None:
             return candidate
-    raise RuntimeError("Cannot locate database migrations; pass --migrations-root")
+    raise RuntimeError(
+        "Cannot locate migrations root containing database/migrations and services/collector"
+    )
+
+
+def discover_root(explicit: str | None = None) -> Path:
+    """Find the migrations root without consulting the caller's cwd.
+
+    Relative ``--migrations-root`` and ``MIGRATIONS_ROOT`` values are resolved
+    first from ``COLLECTOR_ROOT`` (matching the CI working-directory contract),
+    then from the discovered repository/image root. A valid
+    ``GITHUB_WORKSPACE`` is preferred during that discovery. The caller's cwd
+    is never a candidate.
+    """
+    configured = explicit if explicit is not None else os.getenv("MIGRATIONS_ROOT")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_absolute():
+            return _validate_root(candidate)
+
+        bases = (COLLECTOR_ROOT, _default_root())
+        checked: list[Path] = []
+        for base in bases:
+            resolved = (base / candidate).resolve()
+            if resolved in checked:
+                continue
+            checked.append(resolved)
+            if _root_layout(resolved) is not None:
+                return resolved
+        raise RuntimeError(
+            f"Invalid relative migrations root: {configured!r}; checked "
+            f"{', '.join(map(str, checked))}; expected database/migrations "
+            "and services/collector (or the collector image layout)"
+        )
+    return _default_root()
 
 
 def build_manifest(root: Path) -> tuple[tuple[str, Path], ...]:

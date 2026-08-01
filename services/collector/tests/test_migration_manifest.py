@@ -1,7 +1,9 @@
 from pathlib import Path
 import os
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 os.environ.setdefault("APP_DB_NAME", "football_intelligence")
@@ -14,6 +16,44 @@ from scripts import migrate  # noqa: E402
 
 
 class MigrationManifestTests(unittest.TestCase):
+    def test_relative_environment_root_is_independent_of_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"MIGRATIONS_ROOT": "../.."}, clear=False):
+                previous = Path.cwd()
+                try:
+                    os.chdir(directory)
+                    self.assertEqual(migrate.discover_root(), ROOT)
+                finally:
+                    os.chdir(previous)
+
+    def test_repository_relative_environment_root_uses_stable_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"MIGRATIONS_ROOT": "."}, clear=False):
+                previous = Path.cwd()
+                try:
+                    os.chdir(directory)
+                    self.assertEqual(migrate.discover_root(), ROOT)
+                finally:
+                    os.chdir(previous)
+
+    def test_default_root_is_independent_of_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MIGRATIONS_ROOT", None)
+                previous = Path.cwd()
+                try:
+                    os.chdir(directory)
+                    self.assertEqual(migrate.discover_root(), ROOT)
+                finally:
+                    os.chdir(previous)
+
+    def test_invalid_root_reports_required_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                RuntimeError, "database/migrations and services/collector"
+            ):
+                migrate.discover_root(directory)
+
     def test_manifest_has_unique_versions_and_real_files(self):
         versions = [version for version, _ in migrate.MIGRATIONS]
         self.assertEqual(len(versions), len(set(versions)))
