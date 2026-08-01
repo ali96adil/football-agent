@@ -4,6 +4,7 @@ backups/
 .deployed-revision
 .foundation-deployed
 .last-known-good-revision
+.rollback-releases/
 data/
 logs/
 __pycache__/
