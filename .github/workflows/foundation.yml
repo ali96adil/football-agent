@@ -23,12 +23,15 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_*.py'
 
   frontend:
-    runs-on: ubuntu-latest
+    name: Frontend production build (x86_64)
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v5
+      - name: Require the native x86 runner
+        run: test "$(uname -m)" = "x86_64"
       - uses: actions/setup-node@v5
         with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
@@ -83,8 +86,8 @@ jobs:
         run: bash ../../scripts/ci-migrate-current-schema.sh
 
   compose-and-arm64:
+    name: Compose and release checks (x86_64)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - name: Validate Compose structure
@@ -96,16 +99,36 @@ jobs:
         run: |
           cp .env.ci .env
           PREFLIGHT_SKIP_RUNTIME=1 ./scripts/test_release_dry_runs.sh
-      - name: Enable ARM64 emulation and Buildx
+      - name: Reject unsafe x86-to-ARM64 frontend cross-builds
         run: |
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          log_file="$(mktemp)"
+          if docker buildx build --platform linux/arm64 --target dependencies \
+            --progress plain -f frontend/Dockerfile frontend >"$log_file" 2>&1; then
+            echo "Frontend cross-build unexpectedly succeeded." >&2
+            exit 1
+          fi
+          grep -F "frontend runtime images require a native builder" "$log_file"
+
+  arm64-runtime:
+    name: ARM64 runtime images (native)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require a native ARM64 runner and enable Buildx
+        run: |
+          test "$(uname -m)" = "aarch64"
           docker buildx create --name foundation-builder --driver docker-container --use
           docker buildx inspect --bootstrap
-      - name: Validate ARM64 Docker builds
+      - name: Validate ARM64 collector runtime
         run: |
           docker buildx build --platform linux/arm64 --load \
             -f services/collector/Dockerfile -t football-api-ci .
+          test "$(docker image inspect --format '{{.Architecture}}' football-api-ci)" = "arm64"
           docker run --rm --platform linux/arm64 --entrypoint python football-api-ci -c \
             "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
+      - name: Build and exercise the ARM64 frontend runtime
+        run: |
           docker buildx build --platform linux/arm64 --load \
             -f frontend/Dockerfile -t football-frontend-ci frontend
+          ./scripts/validate_frontend_arm64_runtime.sh football-frontend-ci
