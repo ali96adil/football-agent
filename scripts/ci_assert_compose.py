@@ -3,7 +3,42 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+from pathlib import Path
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_compose_model() -> dict:
+    raw_model = "" if sys.stdin.isatty() else sys.stdin.read()
+    if not raw_model.strip():
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(REPOSITORY_ROOT / ".env.ci"),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            if result.stderr:
+                print(result.stderr.rstrip(), file=sys.stderr)
+            raise SystemExit(result.returncode)
+        raw_model = result.stdout
+
+    try:
+        return json.loads(raw_model)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"compose assertion failed: invalid Compose JSON: {exc}") from exc
 
 
 def require(condition: bool, message: str) -> None:
@@ -12,7 +47,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> None:
-    model = json.load(sys.stdin)
+    model = load_compose_model()
     services = model["services"]
     networks = model["networks"]
 

@@ -92,9 +92,12 @@ jobs:
       - uses: actions/checkout@v5
       - name: Validate Compose structure
         run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
           docker compose --env-file .env.ci config --quiet
           docker compose --env-file .env.ci config --format json \
             | python3 scripts/ci_assert_compose.py
+      - name: Reject empty Docker platform arguments
+        run: docker build --target platform-check -f frontend/Dockerfile frontend
       - name: Validate deploy and rollback dry-runs
         run: |
           cp .env.ci .env
@@ -102,7 +105,7 @@ jobs:
       - name: Reject unsafe x86-to-ARM64 frontend cross-builds
         run: |
           log_file="$(mktemp)"
-          if docker buildx build --platform linux/arm64 --target dependencies \
+          if docker buildx build --platform linux/arm64 --target platform-check \
             --progress plain -f frontend/Dockerfile frontend >"$log_file" 2>&1; then
             echo "Frontend cross-build unexpectedly succeeded." >&2
             exit 1

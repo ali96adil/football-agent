@@ -1,29 +1,27 @@
 # syntax=docker/dockerfile:1.7
 
-ARG BUILDPLATFORM
-ARG TARGETPLATFORM
-
-FROM --platform=$BUILDPLATFORM node:22-alpine AS dependencies
+FROM --platform=$BUILDPLATFORM node:22-alpine AS platform-check
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 WORKDIR /app
-COPY package*.json ./
 # Next standalone traces platform-native packages such as sharp. Refuse a
 # cross-build before npm runs so an x86 build can never populate an ARM image.
 RUN test -n "$BUILDPLATFORM" \
     && test -n "$TARGETPLATFORM" \
     && test "$BUILDPLATFORM" = "$TARGETPLATFORM" \
     || (echo "frontend runtime images require a native builder: BUILDPLATFORM=$BUILDPLATFORM TARGETPLATFORM=$TARGETPLATFORM" >&2; exit 1)
+
+FROM platform-check AS dependencies
+COPY package*.json ./
 RUN npm ci
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
+FROM dependencies AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM --platform=$TARGETPLATFORM node:22-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
