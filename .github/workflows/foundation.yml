@@ -3,7 +3,11 @@ name: v1 foundation
 on:
   pull_request:
   push:
-    branches: [main, "v1/**"]
+    branches: [main]
+
+concurrency:
+  group: foundation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-tests:
@@ -12,8 +16,8 @@ jobs:
       run:
         working-directory: services/collector
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_*.py'
@@ -24,8 +28,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
       - run: npm run lint
@@ -55,8 +59,8 @@ jobs:
       APP_DB_PASSWORD: test-password-only
       MIGRATIONS_ROOT: ../..
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
       - name: Migrate empty test database
@@ -71,16 +75,37 @@ jobs:
           with psycopg.connect(url) as connection:
               assert connection.execute("select to_regclass('core.jobs')").fetchone()[0] == "core.jobs"
           PY
+      - name: PostgreSQL queue concurrency and migration atomicity
+        env:
+          RUN_POSTGRES_INTEGRATION: "1"
+        run: python -m unittest tests.test_postgres_job_queue tests.test_postgres_migrations -v
       - name: Migrate a current-schema fixture
         run: bash ../../scripts/ci-migrate-current-schema.sh
 
   compose-and-arm64:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate Compose structure
-        run: docker compose --env-file .env.ci config --quiet
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+        run: |
+          docker compose --env-file .env.ci config --quiet
+          docker compose --env-file .env.ci config --format json \
+            | python3 scripts/ci_assert_compose.py
+      - name: Validate deploy and rollback dry-runs
+        run: |
+          cp .env.ci .env
+          PREFLIGHT_SKIP_RUNTIME=1 ./scripts/test_release_dry_runs.sh
+      - name: Enable ARM64 emulation and Buildx
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --name foundation-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
       - name: Validate ARM64 Docker builds
-        run: docker buildx build --platform linux/arm64 --load -f services/collector/Dockerfile -t football-api-ci . && docker buildx build --platform linux/arm64 --load -f frontend/Dockerfile -t football-frontend-ci frontend
+        run: |
+          docker buildx build --platform linux/arm64 --load \
+            -f services/collector/Dockerfile -t football-api-ci .
+          docker run --rm --platform linux/arm64 --entrypoint python football-api-ci -c \
+            "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
+          docker buildx build --platform linux/arm64 --load \
+            -f frontend/Dockerfile -t football-frontend-ci frontend
