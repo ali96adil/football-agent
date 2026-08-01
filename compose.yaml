@@ -37,7 +37,7 @@ services:
     mem_limit: ${PROXY_MEMORY_LIMIT:-96m}
     cpus: ${PROXY_CPU_LIMIT:-0.25}
     logging: *default-logging
-    networks: [football_edge]
+    networks: [football_edge, football_ingress]
 
   postgres:
     image: postgres:17.10-alpine
@@ -119,7 +119,7 @@ services:
       context: .
       dockerfile: services/collector/Dockerfile
     container_name: football-worker
-    command: ["python", "scripts/worker.py"]
+    command: ["python", "-m", "scripts.worker"]
     restart: unless-stopped
     depends_on:
       migrate:
@@ -214,6 +214,9 @@ volumes:
   caddy_config:
 
 networks:
+  # A non-internal network is required for Docker to install the proxy's
+  # published host-port forwarding rules. No upstream joins this network.
+  football_ingress:
   football_edge:
     internal: true
   football_private:

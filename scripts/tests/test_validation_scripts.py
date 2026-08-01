@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -9,6 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import check_env_names, ci_assert_compose
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class TtyInput(io.StringIO):
@@ -152,6 +157,45 @@ class ComposeModelInputTests(unittest.TestCase):
             ci_assert_compose.load_compose_model()
         self.assertEqual(raised.exception.code, 23)
         self.assertEqual(stderr.getvalue(), "compose failed\n")
+
+
+class ComposeRuntimeTopologyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(ROOT / ".env.ci"),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        cls.model = json.loads(result.stdout)
+
+    def test_current_model_has_routable_proxy_and_importable_worker(self) -> None:
+        ci_assert_compose.assert_compose_model(copy.deepcopy(self.model))
+
+    def test_internal_only_proxy_is_rejected(self) -> None:
+        model = copy.deepcopy(self.model)
+        ingress = next(name for name in model["networks"] if name.endswith("football_ingress"))
+        model["services"]["proxy"]["networks"].pop(ingress)
+
+        with self.assertRaisesRegex(SystemExit, "proxy must join football_ingress"):
+            ci_assert_compose.assert_compose_model(model)
+
+    def test_worker_script_path_invocation_is_rejected(self) -> None:
+        model = copy.deepcopy(self.model)
+        model["services"]["worker"]["command"] = ["python", "scripts/worker.py"]
+
+        with self.assertRaisesRegex(SystemExit, "worker must run as a module"):
+            ci_assert_compose.assert_compose_model(model)
 
 
 if __name__ == "__main__":
