@@ -43,6 +43,7 @@ class PostgreSQLAuthRBACTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
         async with pool.connection() as connection:
+            await connection.execute("DELETE FROM core.jobs WHERE requested_by IN (SELECT id FROM core.users WHERE username LIKE 'rbac_test_%')")
             await connection.execute("DELETE FROM core.users WHERE username LIKE 'rbac_test_%'")
         await close_connection_pool()
 
@@ -66,6 +67,13 @@ class PostgreSQLAuthRBACTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post("/api/v1/admin/users", json=payload, **self.auth("admin"))).status_code, 403)
         response = await self.client.post("/api/v1/admin/users", json=payload, **self.auth("admin", csrf=True))
         self.assertEqual(response.status_code, 201, response.text)
+
+        action_payload = {"limit": 5, "window_size": 3, "fixture_days": 2}
+        viewer_action = await self.client.post("/api/v1/operations/actions/evaluation", json=action_payload, **self.auth("viewer", csrf=True))
+        self.assertEqual(viewer_action.status_code, 403)
+        operator_action = await self.client.post("/api/v1/operations/actions/evaluation", json=action_payload, **self.auth("operator", csrf=True))
+        self.assertEqual(operator_action.status_code, 202, operator_action.text)
+        self.assertEqual(operator_action.json()["job_type"], "evaluate_predictions")
 
 
 if __name__ == "__main__":

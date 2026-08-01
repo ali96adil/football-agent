@@ -4,12 +4,14 @@ import Link from "next/link";
 import {
   LayoutDashboard,
   CalendarDays,
-  Users,
   Brain,
-  BarChart3,
+  Database,
+  ListChecks,
+  Shield,
+  ScrollText,
   Settings,
-  Trophy,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 
 const navigation = [
   {
@@ -19,13 +21,13 @@ const navigation = [
   },
   {
     title: "المباريات",
-    href: "/matches",
+    href: "/fixtures",
     icon: CalendarDays,
   },
   {
-    title: "الفرق",
-    href: "/teams",
-    icon: Users,
+    title: "مصادر البيانات",
+    href: "/sources",
+    icon: Database,
   },
   {
     title: "التوقعات",
@@ -33,14 +35,20 @@ const navigation = [
     icon: Brain,
   },
   {
-    title: "التحليلات",
-    href: "/analytics",
-    icon: BarChart3,
+    title: "المهام والتحكم",
+    href: "/operations",
+    icon: ListChecks,
   },
   {
-    title: "النماذج",
-    href: "/models",
-    icon: Trophy,
+    title: "المستخدمون والصلاحيات",
+    href: "/admin/users",
+    icon: Shield,
+    admin: true,
+  },
+  {
+    title: "سجل الإجراءات",
+    href: "/audit",
+    icon: ScrollText,
   },
   {
     title: "الإعدادات",
@@ -50,8 +58,9 @@ const navigation = [
 ];
 
 export default function AppSidebar() {
+  const { user } = useAuth();
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-l bg-background">
+    <aside className="hidden h-screen w-72 shrink-0 flex-col border-l bg-slate-950 text-slate-100 lg:flex">
       <div className="border-b px-6 py-5">
         <h1 className="text-xl font-bold">
           ⚽ ذكاء كرة القدم
@@ -63,14 +72,14 @@ export default function AppSidebar() {
       </div>
 
       <nav className="flex-1 space-y-1 p-4">
-        {navigation.map((item) => {
+        {navigation.filter(item => !item.admin || user?.role === "admin").map((item) => {
           const Icon = item.icon;
 
           return (
             <Link
               key={item.title}
               href={item.href}
-              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-300 transition-colors hover:bg-cyan-500/10 hover:text-cyan-200"
             >
               <Icon className="h-5 w-5" />
               <span>{item.title}</span>
@@ -80,7 +89,7 @@ export default function AppSidebar() {
       </nav>
 
       <div className="border-t p-4 text-xs text-muted-foreground">
-        الإصدار 0.1.0
+        <span dir="ltr">1.0.0-dev.3</span>
       </div>
     </aside>
   );

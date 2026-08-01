@@ -30,6 +30,7 @@ MIGRATION_PATHS = (
     ("008_add_job_queue", "database/migrations/008_add_job_queue.sql"),
     ("009_add_worker_operations", "database/migrations/009_add_worker_operations.sql"),
     ("010_add_auth_rbac", "database/migrations/010_add_auth_rbac.sql"),
+    ("011_add_product_operations", "database/migrations/011_add_product_operations.sql"),
 )
 
 # These files predate the atomic runner and may already be recorded by checksum

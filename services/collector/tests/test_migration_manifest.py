@@ -99,3 +99,9 @@ class MigrationManifestTests(unittest.TestCase):
         self.assertIn("admin", content)
         self.assertIn("operator", content)
         self.assertIn("viewer", content)
+
+    def test_operations_migration_records_results_and_settings(self):
+        content = (ROOT / "database/migrations/011_add_product_operations.sql").read_text()
+        self.assertIn("result JSONB", content)
+        self.assertIn("requested_by", content)
+        self.assertIn("core.system_settings", content)

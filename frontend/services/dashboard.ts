@@ -4,6 +4,7 @@ export interface DashboardResponse {
   system: {
     status: string;
     version: string;
+    revision: string;
   };
 
   operations: {

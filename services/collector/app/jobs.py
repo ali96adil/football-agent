@@ -129,14 +129,14 @@ class JobQueue:
         return result.rowcount == 1
 
     @staticmethod
-    async def complete(pool: Any, *, job: Job) -> bool:
+    async def complete(pool: Any, *, job: Job, result_payload: dict[str, Any] | None = None) -> bool:
         async with pool.connection() as connection:
             async with connection.transaction():
                 result = await connection.execute(
-                    """UPDATE core.jobs SET status='succeeded', finished_at=NOW(), locked_by=NULL,
+                    """UPDATE core.jobs SET status='succeeded', finished_at=NOW(), result=%s, locked_by=NULL,
                            lease_expires_at=NULL, heartbeat_at=NULL, updated_at=NOW()
                          WHERE id=%s AND status='running' AND locked_by=%s""",
-                    (job.id, job.owner_token),
+                    (Jsonb(result_payload or {}), job.id, job.owner_token),
                 )
         return result.rowcount == 1
 

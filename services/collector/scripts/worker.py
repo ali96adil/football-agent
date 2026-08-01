@@ -15,7 +15,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s | 
 logger = logging.getLogger("football-worker")
 
 
-async def execute(job: Job) -> None:
+async def execute(job: Job) -> dict[str, Any]:
     """Run an idempotent handler keyed by job.idempotency_key.
 
     A database lease provides at-least-once delivery, not distributed exactly
@@ -23,7 +23,7 @@ async def execute(job: Job) -> None:
     provider that supports idempotency, or persist an outbox/result first.
     """
     if job.job_type == "noop":
-        return
+        return {"status": "success"}
     if job.job_type == "sync_pipeline":
         from app.api.routes.sync import sync_all
 
@@ -47,7 +47,38 @@ async def execute(job: Job) -> None:
             result["status"],
             result["duration_seconds"],
         )
-        return
+        return result
+    if job.job_type == "build_snapshots":
+        from scripts.build_all_snapshots import get_team_targets
+        from app.services.snapshot_service import SnapshotService
+
+        successful, failed = 0, 0
+        async with pool.connection() as connection:
+            targets = await get_team_targets(connection, limit=int(job.payload.get("limit", 100)))
+            for target in targets:
+                try:
+                    await SnapshotService.build_and_save(
+                        connection=connection, team_id=target.team_id,
+                        competition_id=target.competition_id, season_id=target.season_id,
+                        window_size=int(job.payload.get("window_size", 10)),
+                        cutoff_at=target.data_cutoff_at,
+                    )
+                    successful += 1
+                except Exception:
+                    failed += 1
+        return {"status": "success" if failed == 0 else "partial_success", "successful": successful, "failed": failed}
+    if job.job_type == "run_predictions":
+        from app.services.scheduled_prediction_service import ScheduledPredictionService
+        async with pool.connection() as connection:
+            return await ScheduledPredictionService.run(
+                connection, days_ahead=int(job.payload.get("fixture_days", 14)),
+                limit=int(job.payload.get("limit", 100)), window_size=int(job.payload.get("window_size", 10)),
+                calculation_version=str(job.payload.get("calculation_version", "v1-product")),
+            )
+    if job.job_type == "evaluate_predictions":
+        from app.services.prediction_evaluation_service import PredictionEvaluationService
+        async with pool.connection() as connection:
+            return await PredictionEvaluationService.run(connection, limit=int(job.payload.get("limit", 100)))
     raise RuntimeError(f"unsupported job_type: {job.job_type}")
 
 
@@ -70,6 +101,18 @@ def sync_payload() -> dict[str, Any]:
     }
 
 
+async def configured_sync_interval(default_seconds: int) -> int:
+    async with pool.connection() as connection:
+        result = await connection.execute(
+            "SELECT value FROM core.system_settings WHERE key='sync_interval_seconds'"
+        )
+        row = await result.fetchone()
+    interval = int(row["value"]) if row else default_seconds
+    if interval < 60:
+        raise RuntimeError("configured sync interval must be at least 60 seconds")
+    return interval
+
+
 async def keep_lease(job: Job, *, worker_id: str, lease_seconds: int) -> None:
     """Renew a long-running job lease without sharing its execution connection."""
     while True:
@@ -90,6 +133,7 @@ async def run() -> None:
     await open_connection_pool()
     try:
         while True:
+            sync_interval_seconds = await configured_sync_interval(sync_interval_seconds)
             now = datetime.now(timezone.utc)
             idempotency_key, next_sync_at = sync_schedule(now, sync_interval_seconds)
             scheduled = await JobQueue.enqueue(
@@ -131,7 +175,7 @@ async def run() -> None:
                 keep_lease(job, worker_id=worker_id, lease_seconds=lease_seconds)
             )
             try:
-                await asyncio.wait_for(execute(job), timeout=job.timeout_seconds)
+                result_payload = await asyncio.wait_for(execute(job), timeout=job.timeout_seconds)
             except TimeoutError:
                 logger.error("job %s exceeded its %s second timeout", job.id, job.timeout_seconds)
                 saved = await JobQueue.fail(pool, job=job, error="job timeout")
@@ -139,7 +183,7 @@ async def run() -> None:
                 logger.exception("job %s failed", job.id)
                 saved = await JobQueue.fail(pool, job=job, error=str(exc))
             else:
-                saved = await JobQueue.complete(pool, job=job)
+                saved = await JobQueue.complete(pool, job=job, result_payload=result_payload)
             finally:
                 lease_task.cancel()
                 try:

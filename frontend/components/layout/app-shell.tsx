@@ -15,7 +15,7 @@ export default function AppShell({
       <div className="flex flex-1 flex-col">
         <AppHeader />
 
-        <main className="flex-1 p-6 bg-muted/20">
+        <main className="flex-1 bg-slate-50 p-4 dark:bg-slate-900 sm:p-6">
           {children}
         </main>
       </div>

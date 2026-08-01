@@ -14,6 +14,7 @@ from app.db.connection import lifespan, pool
 from app.api.routes.snapshots import router as snapshots_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.auth import router as auth_router, users_router
+from app.api.routes.operations import router as operations_router
 from app.auth import CSRF_COOKIE, audit, current_user
 from app.security import hash_secret
 from app.api.routes.fixtures_browser import router as fixtures_browser_router
@@ -45,6 +46,7 @@ app.include_router(snapshots_router)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(operations_router)
 app.include_router(predictions_router)
 app.include_router(fixtures_browser_router)
 

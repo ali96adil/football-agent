@@ -238,6 +238,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <p dir="ltr">v{data.system.version}</p>
+            <p dir="ltr" className="text-xs text-muted-foreground">commit {data.system.revision}</p>
             <p>
               نوع البيانات: {data.operations.data_mode === "real" ? "حقيقية من مزود خارجي" : "غير متحقق منها بعد"}
             </p>

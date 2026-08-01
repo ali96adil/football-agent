@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import { useState } from "react";
+import { AuthProvider } from "@/hooks/use-auth";
 
 export default function Providers({
   children,
@@ -32,10 +33,9 @@ export default function Providers({
       disableTransitionOnChange
     >
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          {children}
-          <Toaster richColors position="top-right" />
-        </TooltipProvider>
+        <AuthProvider><TooltipProvider>
+          {children}<Toaster richColors position="top-right" />
+        </TooltipProvider></AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );
