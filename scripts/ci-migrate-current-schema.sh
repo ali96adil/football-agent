@@ -16,3 +16,4 @@ sed '/-- v1 foundation: durable background job queue/,$d' database/schema.sql \
   | psql -h "$APP_DB_HOST" -p "$APP_DB_PORT" -U "$APP_DB_USER" -d "$fixture_db" -v ON_ERROR_STOP=1
 python services/collector/scripts/migrate.py --migrations-root "$PWD"
 psql -h "$APP_DB_HOST" -p "$APP_DB_PORT" -U "$APP_DB_USER" -d "$fixture_db" -tAc "SELECT to_regclass('core.jobs')" | grep -qx core.jobs
+psql -h "$APP_DB_HOST" -p "$APP_DB_PORT" -U "$APP_DB_USER" -d "$fixture_db" -tAc "SELECT to_regclass('core.worker_heartbeats')" | grep -qx core.worker_heartbeats

@@ -28,6 +28,7 @@ MIGRATION_PATHS = (
     ("007_add_match_predictions", "database/migrations/007_add_match_predictions.sql"),
     ("007_add_overall_rating", "database/migrations/007_add_overall_rating.sql"),
     ("008_add_job_queue", "database/migrations/008_add_job_queue.sql"),
+    ("009_add_worker_operations", "database/migrations/009_add_worker_operations.sql"),
 )
 
 # These files predate the atomic runner and may already be recorded by checksum

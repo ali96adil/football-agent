@@ -179,6 +179,16 @@ export default function DashboardPage() {
         second: "2-digit",
       }).format(new Date(dataUpdatedAt))
     : "—";
+  const formatTimestamp = (value: string | null) =>
+    value
+      ? new Intl.DateTimeFormat("ar-IQ", {
+          dateStyle: "medium",
+          timeStyle: "medium",
+        }).format(new Date(value))
+      : "لا يوجد تحديث مسجل";
+  const workerFresh = data.operations.worker
+    ? Date.now() - new Date(data.operations.worker.heartbeat_at).getTime() < 120000
+    : false;
 
   return (
     <div className="space-y-8">
@@ -193,8 +203,8 @@ export default function DashboardPage() {
           </h1>
 
           <p className="max-w-2xl text-sm text-muted-foreground">
-            بيانات حقيقية ومباشرة من خدمة جمع البيانات وقاعدة
-            PostgreSQL.
+            بيانات من خط الجمع وقاعدة PostgreSQL، مع تمييز صريح لحالة
+            المصدر وآخر تحديث فعلي.
           </p>
         </div>
 
@@ -218,6 +228,66 @@ export default function DashboardPage() {
             تحديث
           </button>
         </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>هوية الإصدار والبيانات</CardTitle>
+            <CardDescription>هذه مرحلة تطويرية وليست v1.0.0 مكتملة</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p dir="ltr">v{data.system.version}</p>
+            <p>
+              نوع البيانات: {data.operations.data_mode === "real" ? "حقيقية من مزود خارجي" : "غير متحقق منها بعد"}
+            </p>
+            <p className="text-muted-foreground">
+              آخر جمع فعلي: {formatTimestamp(data.operations.last_data_update_at)}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Worker والجدولة</CardTitle>
+            <CardDescription>حالة التنفيذ المستقاة من heartbeat في PostgreSQL</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>{workerFresh ? `يعمل: ${data.operations.worker?.status}` : "لا توجد heartbeat حديثة"}</p>
+            <p>قيد الانتظار: {numberFormatter.format(data.operations.jobs.pending)}</p>
+            <p>قيد التنفيذ: {numberFormatter.format(data.operations.jobs.running)}</p>
+            <p>فشل نهائي: {numberFormatter.format(data.operations.jobs.dead_letter)}</p>
+            <p className="text-muted-foreground">
+              المزامنة التالية: {formatTimestamp(data.operations.worker?.next_sync_at ?? null)}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>مصادر البيانات</CardTitle>
+            <CardDescription>الإعداد وآخر نجاح لكل مصدر</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {data.operations.sources.map((source) => (
+              <div key={source.code} className="rounded-md border p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span>{source.name}</span>
+                  <span className={source.enabled && source.configured ? "text-emerald-600" : "text-amber-600"}>
+                    {!source.enabled || !source.configured
+                      ? "غير مهيأ"
+                      : source.scheduled
+                        ? "ضمن الجدولة"
+                        : "مهيأ يدويًا"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  آخر نجاح: {formatTimestamp(source.last_success_at)}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

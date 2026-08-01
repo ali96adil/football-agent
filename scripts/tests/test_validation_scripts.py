@@ -204,6 +204,17 @@ class ComposeRuntimeTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "worker must run as a module"):
             ci_assert_compose.assert_compose_model(model)
 
+    def test_worker_receives_scheduler_and_provider_configuration(self) -> None:
+        environment = self.model["services"]["worker"]["environment"]
+        for name in (
+            "SYNC_INTERVAL_SECONDS",
+            "FOOTBALL_DATA_API_KEY",
+            "API_FOOTBALL_KEY",
+            "SPORTMONKS_API_KEY",
+            "THESPORTSDB_API_KEY",
+        ):
+            self.assertIn(name, environment)
+
 
 if __name__ == "__main__":
     unittest.main()

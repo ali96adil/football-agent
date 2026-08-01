@@ -1722,3 +1722,19 @@ CREATE TABLE core.jobs (
 
 CREATE INDEX idx_jobs_claimable ON core.jobs (status, run_after, created_at) WHERE status IN ('queued', 'retry');
 CREATE INDEX idx_jobs_leases ON core.jobs (lease_expires_at) WHERE status = 'running';
+
+-- v1 development: observable native scheduler (migration 009_add_worker_operations.sql)
+CREATE TABLE core.worker_heartbeats (
+    worker_id text PRIMARY KEY,
+    status text NOT NULL CHECK (status IN ('idle', 'running', 'stopping')),
+    heartbeat_at timestamp with time zone NOT NULL DEFAULT now(),
+    current_job_id uuid REFERENCES core.jobs(id) ON DELETE SET NULL,
+    scheduler_enabled boolean NOT NULL DEFAULT true,
+    schedule_interval_seconds integer NOT NULL CHECK (schedule_interval_seconds > 0),
+    next_sync_at timestamp with time zone,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    started_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_worker_heartbeats_freshness ON core.worker_heartbeats (heartbeat_at DESC);

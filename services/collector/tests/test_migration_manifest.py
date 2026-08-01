@@ -85,3 +85,9 @@ class MigrationManifestTests(unittest.TestCase):
         queue = (ROOT / "services/collector/app/jobs.py").read_text()
         self.assertIn("FOR UPDATE SKIP LOCKED", queue)
         self.assertIn("recover_expired", queue)
+
+    def test_worker_operations_migration_has_heartbeat_and_scheduler_state(self):
+        content = (ROOT / "database/migrations/009_add_worker_operations.sql").read_text()
+        self.assertIn("core.worker_heartbeats", content)
+        self.assertIn("next_sync_at", content)
+        self.assertIn("current_job_id UUID REFERENCES core.jobs", content)

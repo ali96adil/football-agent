@@ -77,6 +77,7 @@ jobs:
           url = f"postgresql://{os.environ['APP_DB_USER']}:{os.environ['APP_DB_PASSWORD']}@{os.environ['APP_DB_HOST']}/{os.environ['APP_DB_NAME']}"
           with psycopg.connect(url) as connection:
               assert connection.execute("select to_regclass('core.jobs')").fetchone()[0] == "core.jobs"
+              assert connection.execute("select to_regclass('core.worker_heartbeats')").fetchone()[0] == "core.worker_heartbeats"
           PY
       - name: PostgreSQL queue concurrency and migration atomicity
         env:
@@ -129,7 +130,7 @@ jobs:
             -f services/collector/Dockerfile -t football-api-ci .
           test "$(docker image inspect --format '{{.Architecture}}' football-api-ci)" = "arm64"
           docker run --rm --platform linux/arm64 --entrypoint python football-api-ci -c \
-            "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
+            "from pathlib import Path; required=['requirements.txt','app','scripts/migrate.py','scripts/worker.py','database/001_core_schema.sql','database/migrations/008_add_job_queue.sql','database/migrations/009_add_worker_operations.sql']; missing=[p for p in required if not Path('/app', p).exists()]; assert not missing, missing"
       - name: Build and exercise the ARM64 frontend runtime
         run: |
           docker buildx build --platform linux/arm64 --load \
