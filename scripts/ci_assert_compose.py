@@ -43,6 +43,12 @@ def main() -> None:
         upstream_networks = set(services[upstream].get("networks", {}))
         require(proxy_networks & upstream_networks, f"proxy cannot reach {upstream}")
 
+    for service_name in ("postgres", "api", "frontend"):
+        require(
+            bool(services[service_name].get("healthcheck")),
+            f"{service_name} must retain its internal healthcheck",
+        )
+
 
 if __name__ == "__main__":
     main()

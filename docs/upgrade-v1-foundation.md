@@ -81,6 +81,20 @@ the script moves the previously deployed revision into
 in `.deployed-revision`. It repeats pull/build, backup, migration, and health
 verification on every upgrade.
 
+Release health requires `postgres`, `api`, `worker`, `frontend`, and `proxy` to
+each resolve to one running container. Every configured Docker healthcheck must
+report `healthy`. Verification also requests both the frontend root and the API
+`/health` route through the configured proxy bind address and port, confirms
+migration 008 in PostgreSQL, and samples the worker restart count across a
+stability window.
+
+The Foundation worker does not expose an HTTP endpoint and does not yet persist
+a separate process heartbeat. Its deployment gate therefore proves that the
+container is running rather than restarting and that its Docker restart count
+stays unchanged during the stability window. Queue-job leases and their
+heartbeats remain durable in PostgreSQL, but an idle-worker heartbeat would be
+a separate operational feature beyond this Foundation gate.
+
 ## Migration atomicity and legacy SQL
 
 The runner connects in autocommit mode only so it can explicitly own every
