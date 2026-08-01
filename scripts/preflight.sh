@@ -22,8 +22,15 @@ python3 -c '
 import json, sys
 m=json.load(sys.stdin)
 assert m.get("name") == "football-agent", "Compose project name must be football-agent"
-assert m["volumes"]["postgres_data"]["name"] == "football_postgres_data"
-assert m["volumes"]["n8n_data"]["name"] == "football_n8n_data"
+volumes=m.get("volumes") or {}
+postgres=volumes.get("postgres_data")
+assert postgres is not None, "Required Compose volume postgres_data is missing"
+assert postgres.get("name") == "football_postgres_data", \
+    "Required Compose volume postgres_data must remain named football_postgres_data"
+n8n=volumes.get("n8n_data")
+if n8n is not None:
+    assert n8n.get("name") == "football_n8n_data", \
+        "Optional Compose volume n8n_data must remain named football_n8n_data"
 env=m["services"]["migrate"]["environment"]
 assert env["APP_DB_NAME"] == "football_intelligence"
 assert env["APP_DB_USER"] == "football_app"
