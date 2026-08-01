@@ -1,6 +1,9 @@
 .env
 *.secret
 backups/
+.deployed-revision
+.foundation-deployed
+.last-known-good-revision
 data/
 logs/
 __pycache__/
