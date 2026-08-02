@@ -168,27 +168,119 @@ async def replace_source(source_id: str, payload: SourceWrite, request: Request,
 
 
 @router.post("/sources/{source_id}/test")
-async def test_source(source_id: str, request: Request, actor: Annotated[CurrentUser, Depends(require("admin", csrf=True))]) -> dict:
+async def test_source(
+    source_id: str,
+    request: Request,
+    actor: Annotated[CurrentUser, Depends(require("admin", csrf=True))],
+) -> dict:
     async with pool.connection() as connection:
-        result = await connection.execute("SELECT id,provider,base_url,secret_ciphertext FROM core.data_sources WHERE id=%s",(source_id,))
+        result = await connection.execute(
+            """
+            SELECT id, provider, base_url, secret_ciphertext
+            FROM core.data_sources
+            WHERE id = %s
+            """,
+            (source_id,),
+        )
         row = await result.fetchone()
-        if not row: raise HTTPException(status_code=404, detail="source not found")
-        if not row["provider"] or not row["base_url"]: raise HTTPException(status_code=409, detail="source connection is incomplete")
+
+        if not row:
+            raise HTTPException(status_code=404, detail="source not found")
+
+        if not row["provider"] or not row["base_url"]:
+            raise HTTPException(
+                status_code=409,
+                detail="source connection is incomplete",
+            )
+
         await require_public_destination(row["base_url"])
+
         secret = None
         if row["secret_ciphertext"] is not None:
-            decrypted = await connection.execute("SELECT pgp_sym_decrypt(%s,%s) AS value",(row["secret_ciphertext"],encryption_key()))
+            decrypted = await connection.execute(
+                "SELECT pgp_sym_decrypt(%s, %s) AS value",
+                (
+                    row["secret_ciphertext"],
+                    encryption_key(),
+                ),
+            )
             secret = (await decrypted.fetchone())["value"]
-        try:
-            status, _ = await provider_manager.fetch(provider=row["provider"], endpoint=row["base_url"], params={}, api_key=secret or "")
-            ok = 200 <= status < 500 and status not in (401,403)
-            reason = "ok" if ok else ("authentication_failure" if status in (401,403) else "http_status")
-        except Exception:
-            logger.exception("Source connection test failed for source_id=%s", source_id)
-            ok, status, reason = False, None, "connection_failure"
-        await audit(connection, action="sources.test", outcome="success" if ok else "failure", request=request, actor=actor, target_type="source", target_id=source_id, details={"reason":reason,"http_status":status})
-    return {"ok":ok,"reason":reason,"http_status":status}
 
+        try:
+            endpoint = row["base_url"].rstrip("/")
+
+            if row["provider"] == "api_football":
+                endpoint = f"{endpoint}/status"
+
+            status, payload = await provider_manager.fetch(
+                provider=row["provider"],
+                endpoint=endpoint,
+                params={},
+                api_key=secret or "",
+            )
+
+            if row["provider"] == "api_football":
+                provider_errors = (
+                    payload.get("errors")
+                    if isinstance(payload, dict)
+                    else None
+                )
+
+                response_data = (
+                    payload.get("response", {})
+                    if isinstance(payload, dict)
+                    else {}
+                )
+
+                subscription = (
+                    response_data.get("subscription", {})
+                    if isinstance(response_data, dict)
+                    else {}
+                )
+
+                ok = (
+                    status == 200
+                    and not provider_errors
+                    and subscription.get("active") is True
+                )
+            else:
+                ok = 200 <= status < 400
+
+            if ok:
+                reason = "ok"
+            elif status in (401, 403):
+                reason = "authentication_failure"
+            else:
+                reason = "http_status"
+
+        except Exception:
+            logger.exception(
+                "Source connection test failed for source_id=%s",
+                source_id,
+            )
+            ok = False
+            status = None
+            reason = "connection_failure"
+
+        await audit(
+            connection,
+            action="sources.test",
+            outcome="success" if ok else "failure",
+            request=request,
+            actor=actor,
+            target_type="source",
+            target_id=source_id,
+            details={
+                "reason": reason,
+                "http_status": status,
+            },
+        )
+
+    return {
+        "ok": ok,
+        "reason": reason,
+        "http_status": status,
+    }
 
 @router.post("/actions/{action}", status_code=202)
 async def enqueue_action(
